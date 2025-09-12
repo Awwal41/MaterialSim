@@ -63,13 +63,11 @@ class MaterialsAgent:
     
     def _initialize_tools(self) -> List:
         """Initialize all available tools."""
-        # For now, return empty list to avoid Pydantic issues
-        # We'll handle simulation directly in the agent
         return []
     
     def _create_agent(self) -> AgentExecutor:
         """Create the agent with tools and memory."""
-        # Define the system prompt
+       
         system_prompt = """You are a Materials AI Agent, an expert in computational materials science and molecular dynamics simulations.
 
 Your capabilities include:
@@ -105,7 +103,7 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
         
-        # Create agent with tools
+        
         try:
             agent = create_openai_tools_agent(
                 llm=self.llm,
@@ -126,27 +124,27 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
         except Exception as e:
             self.logger.warning(f"Failed to create agent with tools: {e}. Falling back to simple LLM.")
             
-            # Fallback to simple LLM chain
+            
             from langchain.chains import LLMChain
             chain = LLMChain(llm=self.llm, prompt=prompt)
             
-            # Create a simple agent executor that just uses the LLM
+           
             class SimpleAgentExecutor:
                 def __init__(self, chain, memory):
                     self.chain = chain
                     self.memory = memory
                 
                 def invoke(self, inputs):
-                    # Get chat history
+                   
                     chat_history = self.memory.chat_memory.messages
                     
-                    # Format the input
+                    
                     formatted_input = {
                         "input": inputs["input"],
                         "chat_history": chat_history
                     }
                     
-                    # Get response
+                    
                     response = self.chain.invoke(formatted_input)
                     
                     return {"output": response["text"]}
@@ -167,13 +165,11 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
         try:
             self.logger.info(f"Running simulation: {instruction}")
             
-            # Parse the instruction to extract simulation parameters
             material, temperature, force_field, n_steps = self._parse_simulation_instruction(instruction)
             
-            # Use simple simulation function
             from ..simple_simulation import run_simple_simulation
             
-            # Run the simulation
+         
             result = run_simple_simulation(
                 material=material,
                 temperature=temperature,
@@ -204,7 +200,7 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
         instruction_lower = instruction.lower()
         materials_db = MaterialsDatabase()
         
-        # Extract material using database
+        
         material = None
         for formula, props in materials_db.get_all_materials().items():
             if (formula.lower() in instruction_lower or 

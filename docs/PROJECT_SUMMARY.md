@@ -160,10 +160,10 @@ prediction = agent.tools[3].predict_property(
 
 ### Database Queries
 ```python
-# Query Materials Project
+
 mp_data = agent.tools[2].query_materials_project("Si")
 
-# Search by structure
+
 similar = agent.tools[2].search_by_structure(structure_dict)
 ```
 
@@ -264,35 +264,6 @@ cd materials-ai-agent
 pip install -e ".[dev]"
 make setup-dev
 ```
-
-## License and Citation
-
-### License
-MIT License - see LICENSE file for details
-
-### Citation
-```bibtex
-@software{materials_ai_agent,
-  title={Materials AI Agent: An Autonomous LLM Agent for Computational Materials Science},
-  author={Materials AI Agent Team},
-  year={2024},
-  url={https://github.com/materials-ai-agent/materials-ai-agent}
-}
-```
-
-## Support and Community
-
-### Getting Help
-- **GitHub Issues**: Bug reports and feature requests
-- **Discussions**: Community Q&A
-- **Documentation**: Comprehensive guides
-- **Email Support**: Direct assistance
-
-### Community
-- **GitHub**: [materials-ai-agent](https://github.com/materials-ai-agent)
-- **Discord**: Community chat
-- **Twitter**: Updates and announcements
-- **LinkedIn**: Professional network
 
 ## Conclusion
 

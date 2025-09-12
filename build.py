@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Build script for Materials AI Agent.
-This script sets up the development environment and runs tests.
+Test script
 """
 
 import os
@@ -77,11 +76,11 @@ def install_dependencies():
     """Install project dependencies."""
     print("\nInstalling dependencies...")
     
-    # Install requirements
+
     if not run_command("pip install -r requirements.txt", "Installing requirements"):
         return False
     
-    # Install in development mode
+
     if not run_command("pip install -e .", "Installing package in development mode"):
         return False
     
@@ -112,10 +111,10 @@ def run_tests():
     """Run test suite."""
     print("\nRunning tests...")
     
-    # Run pytest
+
     if not run_command("python -m pytest tests/ -v", "Running test suite"):
         print("⚠ Some tests failed, but continuing...")
-        return True  # Don't fail build for test failures
+        return True  
     
     return True
 
@@ -144,7 +143,7 @@ def check_lammps():
     """Check if LAMMPS is available."""
     print("\nChecking LAMMPS availability...")
     
-    # Try to find LAMMPS executable
+
     lammps_commands = ["lmp", "lammps", "lmp_serial", "lmp_mpi"]
     
     lammps_found = False
@@ -166,7 +165,7 @@ def setup_configuration():
     """Set up configuration with API keys."""
     print("\nSetting up configuration...")
     
-    # Copy configuration with API keys
+
     if not run_command("cp config_with_keys.env .env", "Copying configuration with API keys"):
         print("⚠ Could not copy configuration file, trying example...")
         run_command("cp env.example .env", "Copying example configuration")
@@ -182,12 +181,12 @@ def generate_documentation():
     """Generate documentation."""
     print("\nGenerating documentation...")
     
-    # Check if sphinx is available
+
     try:
         import sphinx
         print("✓ Sphinx available")
         
-        # Generate docs (if sphinx is configured)
+
         if Path("docs/source").exists():
             run_command("cd docs && make html", "Generating HTML documentation")
         else:
@@ -203,39 +202,39 @@ def main():
     print("Materials AI Agent - Build Script")
     print("=" * 50)
     
-    # Check Python version
+
     if not check_python_version():
         sys.exit(1)
     
-    # Check dependencies
+
     if not check_dependencies():
         print("\nInstalling missing dependencies...")
         if not install_dependencies():
             print("✗ Failed to install dependencies")
             sys.exit(1)
     
-    # Create directories
+ 
     if not create_directories():
         print("✗ Failed to create directories")
         sys.exit(1)
     
-    # Set up configuration
+  
     if not setup_configuration():
         print("✗ Failed to set up configuration")
         sys.exit(1)
     
-    # Check LAMMPS
+    
     check_lammps()
     
-    # Run tests
+  
     if not run_tests():
         print("⚠ Tests failed, but continuing...")
     
-    # Run examples
+    
     if not run_examples():
         print("⚠ Examples failed, but continuing...")
     
-    # Generate documentation
+   
     generate_documentation()
     
     print("\n" + "=" * 50)

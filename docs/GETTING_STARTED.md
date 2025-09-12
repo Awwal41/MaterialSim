@@ -2,23 +2,21 @@
 
 ## 🚀 Quick Start (5 minutes)
 
-Your Materials AI Agent is pre-configured with API keys and ready to use!
-
 ### Option 1: Super Quick Setup
 ```bash
-# Run the quick setup script
+
 python quick_setup.py
 
-# Test that everything works
+
 python test_api_keys.py
 
-# Start using the agent
+
 materials-agent interactive
 ```
 
 ### Option 2: Manual Setup
 ```bash
-# Install dependencies
+
 pip install -r requirements.txt
 pip install -e .
 
@@ -183,7 +181,7 @@ nano .env
 
 ## 🎉 You're Ready!
 
-Your Materials AI Agent is configured and ready to use. The system includes:
+Materials AI Agent is configured and ready to use.
 
 ✅ **Pre-configured API keys** (OpenAI + Materials Project)  
 ✅ **Complete tool suite** (Simulation, Analysis, ML, Database, Visualization)  
@@ -198,4 +196,4 @@ Your Materials AI Agent is configured and ready to use. The system includes:
 3. **Read the docs**: `docs/user_guide.md`
 4. **Explore the API**: `docs/api_reference.md`
 
-Happy simulating! 🧬⚗️🔬
+

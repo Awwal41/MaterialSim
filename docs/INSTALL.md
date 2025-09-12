@@ -120,7 +120,7 @@ sudo make install
 ```bash
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
 # Upgrade pip
 pip install --upgrade pip
@@ -159,7 +159,7 @@ pip install mpi4py
 cp env.example .env
 
 # Edit configuration file
-nano .env  # or use your preferred editor
+nano .env 
 ```
 
 Required configuration:
@@ -392,9 +392,5 @@ After successful installation:
 4. **Join Community**: GitHub discussions and issues
 5. **Contribute**: Fork the repository and submit pull requests
 
-## Support
 
-- **Documentation**: [materials-ai-agent.readthedocs.io](https://materials-ai-agent.readthedocs.io)
-- **GitHub**: [github.com/materials-ai-agent/materials-ai-agent](https://github.com/materials-ai-agent/materials-ai-agent)
-- **Issues**: [github.com/materials-ai-agent/materials-ai-agent/issues](https://github.com/materials-ai-agent/materials-ai-agent/issues)
-- **Email**: support@materials-ai-agent.com
+
