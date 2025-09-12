@@ -496,20 +496,6 @@ def create_sidebar():
         st.session_state.messages = []
         st.rerun()
     
-    # Example prompts
-    st.sidebar.markdown("### 💡 Quick Examples")
-    example_prompts = [
-        "Simulate H2O molecular dynamics",
-        "Analyze silicon RDF at 300K",
-        "Predict aluminum elastic properties",
-        "Generate graphene structure"
-    ]
-    
-    for prompt in example_prompts:
-        if st.sidebar.button(f"💬 {prompt}", key=f"example_{prompt}", use_container_width=True):
-            st.session_state.example_prompt = prompt
-            st.rerun()
-    
     # Settings
     st.sidebar.markdown("### ⚙️ Configuration")
     if st.sidebar.button("🔑 API Settings", use_container_width=True):
@@ -563,33 +549,420 @@ def start_interactive_simulation_workflow(prompt: str):
     if initial_params["temperature"]:
         st.session_state.simulation_workflow["temperature"] = initial_params["temperature"]
     
-    # Start the workflow
-    st.session_state.simulation_workflow["step"] = 0
+    # Start conversational workflow
+    st.session_state.simulation_workflow["step"] = 1
+    st.session_state.simulation_workflow["mode"] = "conversational"
+    
+    # Add assistant response to chat
+    material = initial_params["material"] or "your material"
+    temperature = initial_params["temperature"]
+    
+    response = f"""Great! I'll help you set up a simulation for {material} at {temperature}K. Let me ask you a few questions to configure the simulation properly.
+
+**Step 1: Material Confirmation**
+I detected you want to simulate {material}. Is this correct, or would you like to change the material? You can say:
+- "Yes, that's correct" 
+- "Change it to [material name]"
+- "I want to simulate [different material]"
+
+What would you like to do?"""
+    
+    st.session_state.messages.append({
+        "role": "assistant", 
+        "content": response
+    })
     st.rerun()
+
+def handle_simulation_conversation(prompt: str):
+    """Handle conversational simulation workflow."""
+    workflow = st.session_state.simulation_workflow
+    step = workflow["step"]
+    prompt_lower = prompt.lower()
+    
+    if step == 1:  # Material confirmation
+        if any(word in prompt_lower for word in ["yes", "correct", "right", "that's correct", "that is correct"]):
+            # Move to temperature confirmation
+            workflow["step"] = 2
+            response = f"""Perfect! We'll simulate {workflow['material']}.
+
+**Step 2: Temperature Confirmation**
+I detected you want to simulate at {workflow['temperature']}K. Is this the temperature you want, or would you like to change it? You can say:
+- "Yes, that's correct"
+- "Change it to [temperature]K" 
+- "I want [temperature]K"
+
+What would you like to do?"""
+        elif any(word in prompt_lower for word in ["change", "different", "want to simulate"]):
+            # Extract new material
+            new_material = extract_material_from_prompt(prompt)
+            if new_material:
+                workflow["material"] = new_material
+                workflow["step"] = 2
+                response = f"""Great! I'll update the material to {new_material}.
+
+**Step 2: Temperature Confirmation**
+I detected you want to simulate at {workflow['temperature']}K. Is this the temperature you want, or would you like to change it? You can say:
+- "Yes, that's correct"
+- "Change it to [temperature]K"
+- "I want [temperature]K"
+
+What would you like to do?"""
+            else:
+                response = "I didn't catch the material name. Could you please specify what material you'd like to simulate? For example: 'Change it to aluminum' or 'I want to simulate copper'."
+        else:
+            response = "I'm not sure what you mean. Please say 'Yes, that's correct' to confirm the material, or tell me what material you'd like to simulate instead."
+    
+    elif step == 2:  # Temperature confirmation
+        if any(word in prompt_lower for word in ["yes", "correct", "right", "that's correct", "that is correct"]):
+            # Move to ensemble selection
+            workflow["step"] = 3
+            response = f"""Excellent! We'll simulate {workflow['material']} at {workflow['temperature']}K.
+
+**Step 3: Thermodynamic Ensemble**
+Which thermodynamic ensemble would you like to use? The options are:
+- **NVT** (Canonical): Constant number of particles, volume, and temperature. Good for studying properties at constant temperature.
+- **NPT** (Isothermal-Isobaric): Constant number of particles, pressure, and temperature. Good for studying properties at constant pressure.
+- **NVE** (Microcanonical): Constant number of particles, volume, and energy. Good for studying energy conservation.
+
+Which ensemble would you prefer? Just say 'NVT', 'NPT', or 'NVE'."""
+        elif any(word in prompt_lower for word in ["change", "different", "want"]):
+            # Extract new temperature
+            new_temp = extract_temperature_from_prompt(prompt)
+            if new_temp:
+                workflow["temperature"] = new_temp
+                workflow["step"] = 3
+                response = f"""Perfect! I'll update the temperature to {new_temp}K.
+
+**Step 3: Thermodynamic Ensemble**
+Which thermodynamic ensemble would you like to use? The options are:
+- **NVT** (Canonical): Constant number of particles, volume, and temperature. Good for studying properties at constant temperature.
+- **NPT** (Isothermal-Isobaric): Constant number of particles, pressure, and temperature. Good for studying properties at constant pressure.
+- **NVE** (Microcanonical): Constant number of particles, volume, and energy. Good for studying energy conservation.
+
+Which ensemble would you prefer? Just say 'NVT', 'NPT', or 'NVE'."""
+            else:
+                response = "I didn't catch the temperature. Could you please specify the temperature? For example: 'Change it to 500K' or 'I want 1000K'."
+        else:
+            response = "I'm not sure what you mean. Please say 'Yes, that's correct' to confirm the temperature, or tell me what temperature you'd like to use instead."
+    
+    elif step == 3:  # Ensemble selection
+        if "nvt" in prompt_lower:
+            workflow["ensemble"] = "NVT"
+            workflow["step"] = 4
+            response = f"""Great! We'll use the NVT ensemble.
+
+**Step 4: Thermostat Selection**
+For temperature control, which thermostat would you like to use?
+- **Nose-Hoover**: Most accurate, recommended for most simulations
+- **Berendsen**: Simple and fast, good for quick equilibration
+- **Langevin**: Good for liquid simulations
+- **None**: No thermostat (only for NVE ensemble)
+
+Which thermostat would you prefer?"""
+        elif "npt" in prompt_lower:
+            workflow["ensemble"] = "NPT"
+            workflow["step"] = 4
+            response = f"""Excellent! We'll use the NPT ensemble.
+
+**Step 4: Thermostat Selection**
+For temperature control, which thermostat would you like to use?
+- **Nose-Hoover**: Most accurate, recommended for most simulations
+- **Berendsen**: Simple and fast, good for quick equilibration
+- **Langevin**: Good for liquid simulations
+
+Which thermostat would you prefer?"""
+        elif "nve" in prompt_lower:
+            workflow["ensemble"] = "NVE"
+            workflow["thermostat"] = "None"
+            workflow["step"] = 5
+            response = f"""Perfect! We'll use the NVE ensemble (no thermostat needed).
+
+**Step 5: Timestep and Simulation Length**
+What timestep would you like to use? For {workflow['material']}, I recommend:
+- **0.001 ps** for most simulations
+- **0.0005 ps** for more accuracy
+- **0.002 ps** for faster simulation
+
+And how many steps would you like to run? For example:
+- **10,000 steps** (~10 ps) for quick tests
+- **100,000 steps** (~100 ps) for property calculations
+- **1,000,000 steps** (~1 ns) for long simulations
+
+What timestep and number of steps would you like?"""
+        else:
+            response = "Please choose one of the ensembles: NVT, NPT, or NVE. Just say the name of the ensemble you prefer."
+    
+    elif step == 4:  # Thermostat selection
+        if "nose" in prompt_lower or "hoover" in prompt_lower:
+            workflow["thermostat"] = "Nose-Hoover"
+            workflow["step"] = 5
+            response = f"""Excellent! We'll use the Nose-Hoover thermostat.
+
+**Step 5: Timestep and Simulation Length**
+What timestep would you like to use? For {workflow['material']}, I recommend:
+- **0.001 ps** for most simulations
+- **0.0005 ps** for more accuracy
+- **0.002 ps** for faster simulation
+
+And how many steps would you like to run? For example:
+- **10,000 steps** (~10 ps) for quick tests
+- **100,000 steps** (~100 ps) for property calculations
+- **1,000,000 steps** (~1 ns) for long simulations
+
+What timestep and number of steps would you like?"""
+        elif "berendsen" in prompt_lower:
+            workflow["thermostat"] = "Berendsen"
+            workflow["step"] = 5
+            response = f"""Great! We'll use the Berendsen thermostat.
+
+**Step 5: Timestep and Simulation Length**
+What timestep would you like to use? For {workflow['material']}, I recommend:
+- **0.001 ps** for most simulations
+- **0.0005 ps** for more accuracy
+- **0.002 ps** for faster simulation
+
+And how many steps would you like to run? For example:
+- **10,000 steps** (~10 ps) for quick tests
+- **100,000 steps** (~100 ps) for property calculations
+- **1,000,000 steps** (~1 ns) for long simulations
+
+What timestep and number of steps would you like?"""
+        elif "langevin" in prompt_lower:
+            workflow["thermostat"] = "Langevin"
+            workflow["step"] = 5
+            response = f"""Perfect! We'll use the Langevin thermostat.
+
+**Step 5: Timestep and Simulation Length**
+What timestep would you like to use? For {workflow['material']}, I recommend:
+- **0.001 ps** for most simulations
+- **0.0005 ps** for more accuracy
+- **0.002 ps** for faster simulation
+
+And how many steps would you like to run? For example:
+- **10,000 steps** (~10 ps) for quick tests
+- **100,000 steps** (~100 ps) for property calculations
+- **1,000,000 steps** (~1 ns) for long simulations
+
+What timestep and number of steps would you like?"""
+        else:
+            response = "Please choose one of the thermostats: Nose-Hoover, Berendsen, or Langevin. Just say the name of the thermostat you prefer."
+    
+    elif step == 5:  # Timestep and steps
+        timestep = extract_timestep_from_prompt(prompt)
+        n_steps = extract_steps_from_prompt(prompt)
+        
+        if timestep and n_steps:
+            workflow["timestep"] = timestep
+            workflow["n_steps"] = n_steps
+            workflow["step"] = 6
+            total_time = timestep * n_steps
+            response = f"""Perfect! We'll use a timestep of {timestep} ps and run {n_steps:,} steps (total time: {total_time:.2f} ps).
+
+**Step 6: Structure Source**
+How would you like to provide the atomic structure?
+- **Generate**: I'll create a standard crystal structure for {workflow['material']}
+- **Upload**: You can upload your own structure file (XYZ, POSCAR, CIF, PDB)
+- **Materials Project**: I can search and download from the Materials Project database
+
+Which option would you prefer?"""
+        else:
+            response = "I need both a timestep and number of steps. Please specify both, for example: '0.001 ps and 10000 steps' or 'timestep 0.001 and 50000 steps'."
+    
+    elif step == 6:  # Structure source
+        if any(word in prompt_lower for word in ["generate", "create", "standard"]):
+            workflow["structure_source"] = "generate"
+            workflow["step"] = 7
+            response = f"""Excellent! I'll generate a standard crystal structure for {workflow['material']}.
+
+**Step 7: Force Field Selection**
+Which force field would you like to use?
+- **Tersoff**: Good for covalent materials like Si, C, Ge
+- **EAM**: Good for metals like Al, Cu, Fe, Ni
+- **Lennard-Jones**: Good for noble gases and simple systems
+- **ReaxFF**: Good for reactive systems with C, H, O, N
+
+For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
+        elif any(word in prompt_lower for word in ["upload", "file", "own"]):
+            workflow["structure_source"] = "upload"
+            workflow["step"] = 7
+            response = f"""Great! You'll upload your own structure file.
+
+**Step 7: Force Field Selection**
+Which force field would you like to use?
+- **Tersoff**: Good for covalent materials like Si, C, Ge
+- **EAM**: Good for metals like Al, Cu, Fe, Ni
+- **Lennard-Jones**: Good for noble gases and simple systems
+- **ReaxFF**: Good for reactive systems with C, H, O, N
+
+For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
+        elif any(word in prompt_lower for word in ["materials project", "mp", "database"]):
+            workflow["structure_source"] = "material_project"
+            workflow["step"] = 7
+            response = f"""Perfect! I'll search the Materials Project database for {workflow['material']}.
+
+**Step 7: Force Field Selection**
+Which force field would you like to use?
+- **Tersoff**: Good for covalent materials like Si, C, Ge
+- **EAM**: Good for metals like Al, Cu, Fe, Ni
+- **Lennard-Jones**: Good for noble gases and simple systems
+- **ReaxFF**: Good for reactive systems with C, H, O, N
+
+For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
+        else:
+            response = "Please choose one of the options: Generate, Upload, or Materials Project. Just say which one you prefer."
+    
+    elif step == 7:  # Force field selection
+        if "tersoff" in prompt_lower:
+            workflow["force_field"] = "Tersoff"
+        elif "eam" in prompt_lower:
+            workflow["force_field"] = "EAM"
+        elif "lennard" in prompt_lower or "lj" in prompt_lower:
+            workflow["force_field"] = "Lennard-Jones"
+        elif "reaxff" in prompt_lower or "reax" in prompt_lower:
+            workflow["force_field"] = "ReaxFF"
+        else:
+            response = "Please choose one of the force fields: Tersoff, EAM, Lennard-Jones, or ReaxFF. Just say the name of the force field you prefer."
+            st.session_state.messages.append({"role": "assistant", "content": response})
+            st.rerun()
+            return
+        
+        # Move to confirmation
+        workflow["step"] = 8
+        response = f"""Perfect! We'll use the {workflow['force_field']} force field.
+
+**Simulation Summary:**
+- **Material**: {workflow['material']}
+- **Temperature**: {workflow['temperature']}K
+- **Ensemble**: {workflow['ensemble']}
+- **Thermostat**: {workflow['thermostat']}
+- **Timestep**: {workflow['timestep']} ps
+- **Steps**: {workflow['n_steps']:,}
+- **Total Time**: {workflow['timestep'] * workflow['n_steps']:.2f} ps
+- **Structure**: {workflow['structure_source']}
+- **Force Field**: {workflow['force_field']}
+
+Does everything look correct? Say 'Yes, run the simulation' to start, or tell me what you'd like to change."""
+    
+    elif step == 8:  # Final confirmation
+        if any(word in prompt_lower for word in ["yes", "correct", "run", "start", "go"]):
+            # Start simulation
+            workflow["step"] = 9
+            response = f"""Excellent! Starting the simulation now...
+
+🚀 **Running Simulation...**
+- Setting up atomic structure...
+- Preparing LAMMPS input files...
+- Running molecular dynamics simulation...
+- Processing results...
+
+This may take a few minutes. I'll let you know when it's complete!"""
+            
+            # Actually run the simulation here
+            run_simulation_with_progress()
+        else:
+            response = "Please say 'Yes, run the simulation' to start, or tell me what parameter you'd like to change."
+    
+    elif step == 9:  # Post-simulation analysis
+        if any(word in prompt_lower for word in ["analyze", "analysis", "rdf", "msd", "plot", "graph", "result", "results"]):
+            # Handle analysis requests
+            response = f"""Great! I can help you analyze the simulation results. The simulation has completed and I have the following output files:
+
+📁 **Available Files:**
+- `in.lammps` - LAMMPS input file
+- `output.log` - Simulation log with thermodynamic data
+- `structure.xyz` - Atomic trajectory file
+
+🔬 **Analysis Options:**
+- **RDF (Radial Distribution Function)**: Shows atomic structure and coordination
+- **MSD (Mean Squared Displacement)**: Shows diffusion behavior
+- **Temperature/Energy plots**: Shows thermodynamic properties
+- **Structure visualization**: 3D atomic structure display
+
+What would you like to analyze? Just say "RDF", "MSD", "temperature plot", or describe what you want to see."""
+        elif any(word in prompt_lower for word in ["download", "files", "output"]):
+            response = f"""I can help you download the simulation files. The following files are available:
+
+📁 **Simulation Files:**
+- `in.lammps` - LAMMPS input file
+- `output.log` - Simulation log with thermodynamic data  
+- `structure.xyz` - Atomic trajectory file
+
+Would you like me to prepare these files for download, or would you prefer to analyze the results first?"""
+        elif any(word in prompt_lower for word in ["new", "another", "different", "restart"]):
+            # Reset workflow for new simulation
+            workflow["step"] = 0
+            response = f"""Sure! Let's start a new simulation. What material would you like to simulate this time?
+
+Just tell me what you want to simulate, for example:
+- "Simulate aluminum at 500K"
+- "I want to run a simulation of water"
+- "Simulate copper at room temperature"
+
+What would you like to simulate?"""
+        else:
+            response = f"""The simulation is complete! You can now:
+
+🔬 **Analyze results**: Say "analyze results", "RDF", "MSD", or "plot temperature"
+📁 **Download files**: Say "download files" to get the output files
+🔄 **New simulation**: Say "new simulation" to start over
+
+What would you like to do?"""
+    
+    else:
+        response = "I'm not sure what you mean. Please respond to the current question or say 'cancel' to start over."
+    
+    # Add response to chat
+    st.session_state.messages.append({"role": "assistant", "content": response})
+    st.rerun()
+
+def extract_material_from_prompt(prompt: str) -> str:
+    """Extract material from user prompt."""
+    prompt_lower = prompt.lower()
+    
+    # Common materials
+    if "silicon" in prompt_lower or "si" in prompt_lower:
+        return "Si"
+    elif "aluminum" in prompt_lower or "al" in prompt_lower:
+        return "Al"
+    elif "copper" in prompt_lower or "cu" in prompt_lower:
+        return "Cu"
+    elif "iron" in prompt_lower or "fe" in prompt_lower:
+        return "Fe"
+    elif "water" in prompt_lower or "h2o" in prompt_lower:
+        return "H2O"
+    elif "carbon" in prompt_lower or "c" in prompt_lower:
+        return "C"
+    
+    return None
+
+def extract_temperature_from_prompt(prompt: str) -> float:
+    """Extract temperature from user prompt."""
+    import re
+    temp_match = re.search(r'(\d+)\s*k', prompt.lower())
+    if temp_match:
+        return float(temp_match.group(1))
+    return None
+
+def extract_timestep_from_prompt(prompt: str) -> float:
+    """Extract timestep from user prompt."""
+    import re
+    timestep_match = re.search(r'(\d+\.?\d*)\s*ps', prompt.lower())
+    if timestep_match:
+        return float(timestep_match.group(1))
+    return None
+
+def extract_steps_from_prompt(prompt: str) -> int:
+    """Extract number of steps from user prompt."""
+    import re
+    steps_match = re.search(r'(\d+)\s*steps?', prompt.lower())
+    if steps_match:
+        return int(steps_match.group(1))
+    return None
 
 def show_interactive_simulation_workflow():
     """Show the interactive simulation workflow."""
-    workflow = st.session_state.simulation_workflow
-    step = workflow["step"]
-    
-    if step == 0:
-        show_material_selection()
-    elif step == 1:
-        show_temperature_selection()
-    elif step == 2:
-        show_ensemble_selection()
-    elif step == 3:
-        show_thermostat_selection()
-    elif step == 4:
-        show_timestep_selection()
-    elif step == 5:
-        show_structure_selection()
-    elif step == 6:
-        show_simulation_confirmation()
-    elif step == 7:
-        show_simulation_progress()
-    elif step == 8:
-        show_simulation_complete()
+    # This function is no longer needed - everything is handled in the chat interface
+    pass
 
 def show_material_selection():
     """Step 1: Material selection."""
@@ -639,7 +1012,7 @@ def show_material_selection():
         if st.button("➡️ Next: Temperature", use_container_width=True):
             if material:
                 st.session_state.simulation_workflow["material"] = material
-                st.session_state.simulation_workflow["step"] = 1
+                st.session_state.simulation_workflow["step"] = 2
                 st.rerun()
             else:
                 st.error("Please enter a material formula.")
@@ -688,7 +1061,7 @@ def show_temperature_selection():
     col1, col2, col3 = st.columns([1, 1, 3])
     with col1:
         if st.button("⬅️ Back", use_container_width=True):
-            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.simulation_workflow["step"] = 1
             st.rerun()
     with col2:
         if st.button("❌ Cancel", use_container_width=True):
@@ -698,7 +1071,7 @@ def show_temperature_selection():
     with col3:
         if st.button("➡️ Next: Ensemble", use_container_width=True):
             st.session_state.simulation_workflow["temperature"] = temperature
-            st.session_state.simulation_workflow["step"] = 2
+            st.session_state.simulation_workflow["step"] = 3
             st.rerun()
 
 def show_ensemble_selection():
@@ -1286,8 +1659,8 @@ def run_simulation_with_progress():
         # Show success message
         st.success(f"✅ Simulation completed successfully! {workflow['material']} at {workflow['temperature']}K with {workflow['n_steps']} steps")
         
-        # Move to completion step
-        st.session_state.simulation_workflow["step"] = 8
+        # Move to post-simulation analysis step
+        st.session_state.simulation_workflow["step"] = 9
         
         # Auto-rerun to show results in chat
         st.rerun()
@@ -1327,7 +1700,7 @@ def get_ai_response(prompt: str):
     try:
         if st.session_state.agent:
             with st.spinner("AI is thinking..."):
-                response = st.session_state.agent.run_simulation(prompt)
+                response = st.session_state.agent.chat(prompt)
             
             st.session_state.messages.append({"role": "assistant", "content": response})
             
@@ -1388,33 +1761,24 @@ def show_analysis_options(prompt: str, response: str):
 def display_chat_interface():
     """Display the main chat interface."""
     
-    # Check if we're in simulation workflow
-    if st.session_state.simulation_workflow["step"] > 0:
-        show_interactive_simulation_workflow()
-        return
-    
     # Chat input - moved to top
-    st.markdown("### 💬 Describe your materials science task")
-    if prompt := st.chat_input("💬 Describe your materials science task", placeholder="Type your message here... (e.g., 'Simulate H2O molecular dynamics at 300K')"):
+    if prompt := st.chat_input(placeholder="💬 Describe your materials science task"):
         # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # Check if this is a simulation request
-        if is_simulation_request(prompt):
-            # Start interactive simulation workflow
-            start_interactive_simulation_workflow(prompt)
+        # Check if we're in simulation workflow
+        if st.session_state.simulation_workflow["step"] > 0:
+            # Handle conversational simulation workflow
+            handle_simulation_conversation(prompt)
         else:
-            # Regular chat response
-            get_ai_response(prompt)
+            # Check if this is a new simulation request
+            if is_simulation_request(prompt):
+                # Start interactive simulation workflow
+                start_interactive_simulation_workflow(prompt)
+            else:
+                # Regular chat response
+                get_ai_response(prompt)
     
-    # Handle example prompts
-    if hasattr(st.session_state, 'example_prompt') and st.session_state.example_prompt:
-        prompt = st.session_state.example_prompt
-        st.session_state.example_prompt = None
-        if is_simulation_request(prompt):
-            start_interactive_simulation_workflow(prompt)
-        else:
-            get_ai_response(prompt)
     
     # Chat container
     with st.container():
@@ -1425,26 +1789,16 @@ def display_chat_interface():
             st.markdown("""
             <div class="assistant-message">
                 <strong>🤖 Welcome to MaterialSim AI Agent</strong><br><br>
-                I'm your intelligent assistant for computational materials science. I can help you with:
+                I'm your intelligent assistant for computational materials science. I can help you with molecular dynamics simulations and materials analysis through natural conversation.
                 <br><br>
-                <strong>🧬 Interactive Molecular Dynamics Simulations:</strong><br>
-                • Step-by-step parameter collection with explanations<br>
+                <strong>🧬 Conversational Molecular Dynamics Simulations:</strong><br>
+                • Natural language parameter collection with explanations<br>
                 • Educational guidance for simulation parameters<br>
                 • Structure input options (generate, upload, Materials Project)<br>
                 • Real-time progress tracking and monitoring<br>
                 • Post-simulation analysis and download options<br><br>
                 
-                <strong>📊 Analysis & Visualization:</strong><br>
-                • Analyze simulation results (RDF, MSD, properties)<br>
-                • Generate plots and visualizations<br>
-                • Compute materials properties<br><br>
-                
-                <strong>💬 Educational Workflow:</strong><br>
-                • Learn about simulation parameters as you go<br>
-                • Get explanations for technical terms<br>
-                • Guided parameter selection with recommendations<br><br>
-                
-                <em>Try: "Simulate Silicon at 300K" or "I want to run a molecular dynamics simulation"</em>
+                <em>Just tell me what you'd like to do! For example, say "I want to simulate silicon at 300K" and I'll guide you through the entire process.</em>
             </div>
             """, unsafe_allow_html=True)
         
@@ -1571,6 +1925,7 @@ def main():
             st.session_state.show_settings = True
             st.rerun()
         return
+    
     
     # Check if settings should be shown
     if hasattr(st.session_state, 'show_settings') and st.session_state.show_settings:
