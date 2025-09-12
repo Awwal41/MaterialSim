@@ -1,4 +1,4 @@
-# Materials AI Agent
+# MaterialSim AI Agent
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -9,7 +9,7 @@ An autonomous LLM agent for computational materials science and molecular dynami
 
 ## 🚀 Overview
 
-The Materials AI Agent is a sophisticated system that combines large language models with computational materials science tools to automate molecular dynamics simulations, property calculations, and materials discovery workflows. It enables researchers to perform complex materials simulations through natural language interfaces.
+The MaterialSim AI Agent is a sophisticated system that combines large language models with computational materials science tools to automate molecular dynamics simulations, property calculations, and materials discovery workflows. It enables researchers to perform complex materials simulations through natural language interfaces.
 
 ## ✨ Key Features
 
@@ -54,11 +54,11 @@ See [INSTALL.md](INSTALL.md) for comprehensive installation instructions includi
 
 ### 🌐 Web GUI (Recommended for Beginners)
 ```bash
-# Launch the conversational interface (NEW!)
-python launch_gui_v2.py
+# Launch the pure non-hardcoded interface (NEW!)
+python launch_pure_gui.py
 
-# Or launch the standard GUI
-python launch_gui.py
+# Or launch the integrated GUI
+python launch_integrated_gui.py
 ```
 The conversational GUI will guide you step-by-step through simulations with natural language interaction!
 

@@ -7,14 +7,14 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 setup(
-    name="materials-ai-agent",
+    name="materialsim-ai-agent",
     version="0.1.0",
-    author="Materials AI Agent Team",
-    author_email="contact@materials-ai-agent.com",
+    author="MaterialSim AI Agent Team",
+    author_email="contact@materialsim-ai-agent.com",
     description="An autonomous LLM agent for computational materials science and molecular dynamics",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/materials-ai-agent/materials-ai-agent",
+    url="https://github.com/materialsim-ai-agent/materialsim-ai-agent",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",

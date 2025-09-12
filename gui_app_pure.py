@@ -17,7 +17,7 @@ load_dotenv()
 
 # Page configuration
 st.set_page_config(
-    page_title="Materials AI Agent",
+    page_title="MaterialSim AI Agent",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -127,13 +127,13 @@ def initialize_agent():
 
 def create_header():
     """Create the main header."""
-    st.markdown('<h1 class="main-header">🧬 Materials AI Agent</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🧬 MaterialSim AI Agent</h1>', unsafe_allow_html=True)
     st.markdown("### Intelligent Interface for Computational Materials Science")
     st.markdown("---")
 
 def create_sidebar():
     """Create the sidebar with navigation."""
-    st.sidebar.title("🧬 Materials AI Agent")
+    st.sidebar.title("🧬 MaterialSim AI Agent")
     st.sidebar.markdown("---")
     
     # Agent status
@@ -280,7 +280,7 @@ def main():
     # Initialize agent
     if not initialize_agent():
         st.error("""
-        **Materials AI Agent could not be initialized.**
+        **MaterialSim AI Agent could not be initialized.**
         
         Please check:
         1. Your API keys are set correctly

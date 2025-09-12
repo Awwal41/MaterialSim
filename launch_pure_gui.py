@@ -14,7 +14,7 @@ def check_streamlit():
         return False
 
 def check_agent():
-    """Check if Materials AI Agent can be imported."""
+    """Check if MaterialSim AI Agent can be imported."""
     try:
         from materials_ai_agent import MaterialsAgent
         return True
@@ -41,7 +41,7 @@ def install_dependencies():
 
 def launch_gui():
     """Launch the pure Streamlit GUI."""
-    print("Launching Materials AI Agent Pure GUI...")
+    print("Launching MaterialSim AI Agent Pure GUI...")
     try:
         subprocess.run([
             sys.executable, "-m", "streamlit", "run", "gui_app_pure.py",
@@ -56,7 +56,7 @@ def launch_gui():
 
 def main():
     """Main launcher function."""
-    print("🚀 Materials AI Agent")
+    print("🚀 MaterialSim AI Agent")
     print("=" * 60)
     print("")
     print("=" * 60)
@@ -64,7 +64,7 @@ def main():
     # Check if we're in the right directory
     if not Path("gui_app_pure.py").exists():
         print("❌ Error: gui_app_pure.py not found!")
-        print("Please run this script from the Materials AI Agent directory.")
+        print("Please run this script from the MaterialSim AI Agent directory.")
         return
     
     # Check Streamlit
@@ -76,16 +76,16 @@ def main():
             return
         print("✅ Dependencies installed!")
     
-    # Check Materials AI Agent
+    # Check MaterialSim AI Agent
     if not check_agent():
-        print("📦 Materials AI Agent not found. Installing...")
+        print("📦 MaterialSim AI Agent not found. Installing...")
         try:
             subprocess.run([
                 sys.executable, "-m", "pip", "install", "-e", "."
             ], check=True)
-            print("✅ Materials AI Agent installed!")
+            print("✅ MaterialSim AI Agent installed!")
         except subprocess.CalledProcessError:
-            print("❌ Failed to install Materials AI Agent.")
+            print("❌ Failed to install MaterialSim AI Agent.")
             print("Please install manually: pip install -e .")
             return
     
