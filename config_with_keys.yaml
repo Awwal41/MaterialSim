@@ -1,0 +1,46 @@
+# Materials AI Agent Configuration with API Keys
+# Use this file by setting CONFIG_FILE=config_with_keys.yaml
+
+# API Keys
+openai_api_key: "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"
+mp_api_key: "XXUGdlnvaGvO36FxMMzHijger6HV5CW6"
+nomad_api_key: ""
+
+# LAMMPS Configuration
+lammps_executable: "lmp"
+lammps_mpi_executable: "lmp_mpi"
+
+# Default Simulation Parameters
+default_temperature: 300.0
+default_pressure: 1.0
+default_timestep: 0.001
+
+# Output Directories
+simulation_output_dir: "./simulations"
+analysis_output_dir: "./analysis"
+visualization_output_dir: "./visualizations"
+model_output_dir: "./models"
+
+# Logging
+log_level: "INFO"
+log_file: "./logs/materials_agent.log"
+
+# LLM Configuration
+model_name: "gpt-4"
+max_tokens: 4000
+temperature: 0.1
+
+# ML Configuration
+ml_model_cache_dir: "./models/cache"
+ml_batch_size: 32
+ml_learning_rate: 0.001
+
+# Database Configuration
+mp_base_url: "https://api.materialsproject.org"
+nomad_base_url: "https://nomad-lab.eu/prod/rae/api"
+
+# Simulation Defaults
+default_ensemble: "NVT"
+default_force_field: "tersoff"
+default_n_steps: 10000
+default_output_frequency: 100
