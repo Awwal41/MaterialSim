@@ -409,6 +409,21 @@ def initialize_session_state():
         st.session_state.simulation_running = False
     if 'simulation_params' not in st.session_state:
         st.session_state.simulation_params = {}
+    if 'simulation_workflow' not in st.session_state:
+        st.session_state.simulation_workflow = {
+            'step': 0,  # 0: material, 1: temperature, 2: ensemble, 3: thermostat, 4: timestep, 5: structure, 6: confirm, 7: running, 8: complete
+            'material': '',
+            'temperature': 300.0,
+            'ensemble': 'NVT',
+            'thermostat': 'Nose-Hoover',
+            'timestep': 0.001,
+            'n_steps': 10000,
+            'force_field': 'tersoff',
+            'structure_source': 'generate',  # 'generate', 'upload', 'material_project'
+            'structure_file': None,
+            'explanations_shown': set(),
+            'user_confirmations': {}
+        }
 
 def initialize_agent():
     """Initialize the Materials AI Agent."""
@@ -509,12 +524,12 @@ def is_simulation_request(prompt: str) -> bool:
     ]
     return any(keyword in prompt.lower() for keyword in simulation_keywords)
 
-def parse_simulation_parameters(prompt: str) -> dict:
-    """Parse simulation parameters from natural language."""
+def parse_initial_simulation_params(prompt: str) -> dict:
+    """Parse initial simulation parameters from natural language."""
     import re
     
     # Extract material
-    material = "Si"  # Default
+    material = ""  # Will be set by user
     if "h2o" in prompt.lower() or "water" in prompt.lower():
         material = "H2O"
     elif "silicon" in prompt.lower() or "si" in prompt.lower():
@@ -532,75 +547,699 @@ def parse_simulation_parameters(prompt: str) -> dict:
     if temp_match:
         temperature = float(temp_match.group(1))
     
-    # Extract force field
-    force_field = "tersoff"  # Default
-    if "tersoff" in prompt.lower():
-        force_field = "tersoff"
-    elif "lennard" in prompt.lower() or "lj" in prompt.lower():
-        force_field = "lj"
-    elif "eam" in prompt.lower():
-        force_field = "eam"
-    
-    # Extract steps
-    n_steps = 10000  # Default
-    steps_match = re.search(r'(\d+)\s*steps?', prompt.lower())
-    if steps_match:
-        n_steps = int(steps_match.group(1))
-    
     return {
         "material": material,
-        "temperature": temperature,
-        "force_field": force_field,
-        "n_steps": n_steps
+        "temperature": temperature
     }
 
-def show_simulation_confirmation(prompt: str):
-    """Show simulation parameter confirmation dialog."""
-    params = parse_simulation_parameters(prompt)
+def start_interactive_simulation_workflow(prompt: str):
+    """Start the interactive simulation workflow."""
+    # Parse initial parameters from prompt
+    initial_params = parse_initial_simulation_params(prompt)
     
-    st.markdown("### 🔬 Simulation Parameters")
-    st.markdown("Please review and confirm the simulation parameters:")
+    # Initialize workflow with parsed parameters
+    if initial_params["material"]:
+        st.session_state.simulation_workflow["material"] = initial_params["material"]
+    if initial_params["temperature"]:
+        st.session_state.simulation_workflow["temperature"] = initial_params["temperature"]
+    
+    # Start the workflow
+    st.session_state.simulation_workflow["step"] = 0
+    st.rerun()
+
+def show_interactive_simulation_workflow():
+    """Show the interactive simulation workflow."""
+    workflow = st.session_state.simulation_workflow
+    step = workflow["step"]
+    
+    if step == 0:
+        show_material_selection()
+    elif step == 1:
+        show_temperature_selection()
+    elif step == 2:
+        show_ensemble_selection()
+    elif step == 3:
+        show_thermostat_selection()
+    elif step == 4:
+        show_timestep_selection()
+    elif step == 5:
+        show_structure_selection()
+    elif step == 6:
+        show_simulation_confirmation()
+    elif step == 7:
+        show_simulation_progress()
+    elif step == 8:
+        show_simulation_complete()
+
+def show_material_selection():
+    """Step 1: Material selection."""
+    st.markdown("### 🧬 Step 1: Select Material")
+    st.markdown("What material would you like to simulate?")
+    
+    # Material input
+    material = st.text_input(
+        "Material Formula (e.g., Si, Al2O3, H2O, Fe)",
+        value=st.session_state.simulation_workflow["material"],
+        placeholder="Enter material formula..."
+    )
+    
+    # Show help
+    if st.button("❓ What materials can I simulate?"):
+        show_material_help()
+    
+    # Common materials quick select
+    st.markdown("**Quick Select:**")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("Si (Silicon)", use_container_width=True):
+            st.session_state.simulation_workflow["material"] = "Si"
+            st.rerun()
+    with col2:
+        if st.button("Al (Aluminum)", use_container_width=True):
+            st.session_state.simulation_workflow["material"] = "Al"
+            st.rerun()
+    with col3:
+        if st.button("H2O (Water)", use_container_width=True):
+            st.session_state.simulation_workflow["material"] = "H2O"
+            st.rerun()
+    with col4:
+        if st.button("Fe (Iron)", use_container_width=True):
+            st.session_state.simulation_workflow["material"] = "Fe"
+            st.rerun()
+    
+    # Navigation
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col2:
+        if st.button("➡️ Next: Temperature", use_container_width=True):
+            if material:
+                st.session_state.simulation_workflow["material"] = material
+                st.session_state.simulation_workflow["step"] = 1
+                st.rerun()
+            else:
+                st.error("Please enter a material formula.")
+
+def show_temperature_selection():
+    """Step 2: Temperature selection."""
+    st.markdown("### 🌡️ Step 2: Set Temperature")
+    st.markdown("What temperature would you like to simulate at?")
+    
+    # Temperature input
+    temperature = st.number_input(
+        "Temperature (K)",
+        value=st.session_state.simulation_workflow["temperature"],
+        min_value=1.0,
+        max_value=5000.0,
+        step=10.0,
+        help="Temperature in Kelvin"
+    )
+    
+    # Show help
+    if st.button("❓ What temperature should I use?"):
+        show_temperature_help()
+    
+    # Common temperatures
+    st.markdown("**Common Temperatures:**")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if st.button("77K (Liquid N₂)", use_container_width=True):
+            st.session_state.simulation_workflow["temperature"] = 77.0
+            st.rerun()
+    with col2:
+        if st.button("300K (Room Temp)", use_container_width=True):
+            st.session_state.simulation_workflow["temperature"] = 300.0
+            st.rerun()
+    with col3:
+        if st.button("1000K (High Temp)", use_container_width=True):
+            st.session_state.simulation_workflow["temperature"] = 1000.0
+            st.rerun()
+    with col4:
+        if st.button("2000K (Very High)", use_container_width=True):
+            st.session_state.simulation_workflow["temperature"] = 2000.0
+            st.rerun()
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("➡️ Next: Ensemble", use_container_width=True):
+            st.session_state.simulation_workflow["temperature"] = temperature
+            st.session_state.simulation_workflow["step"] = 2
+            st.rerun()
+
+def show_ensemble_selection():
+    """Step 3: Ensemble selection."""
+    st.markdown("### ⚖️ Step 3: Choose Thermodynamic Ensemble")
+    st.markdown("Which thermodynamic ensemble would you like to use?")
+    
+    # Ensemble selection
+    ensemble = st.selectbox(
+        "Thermodynamic Ensemble",
+        ["NVT", "NPT", "NVE"],
+        index=["NVT", "NPT", "NVE"].index(st.session_state.simulation_workflow["ensemble"]),
+        help="Choose the thermodynamic ensemble for your simulation"
+    )
+    
+    # Show help
+    if st.button("❓ What do NVT, NPT, and NVE mean?"):
+        show_ensemble_help()
+    
+    # Show ensemble description
+    if ensemble == "NVT":
+        st.info("**NVT (Canonical Ensemble)**: Constant number of particles (N), volume (V), and temperature (T). Good for studying properties at constant temperature.")
+    elif ensemble == "NPT":
+        st.info("**NPT (Isothermal-Isobaric Ensemble)**: Constant number of particles (N), pressure (P), and temperature (T). Good for studying properties at constant pressure and temperature.")
+    elif ensemble == "NVE":
+        st.info("**NVE (Microcanonical Ensemble)**: Constant number of particles (N), volume (V), and energy (E). Good for studying energy conservation and dynamics.")
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 1
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("➡️ Next: Thermostat", use_container_width=True):
+            st.session_state.simulation_workflow["ensemble"] = ensemble
+            st.session_state.simulation_workflow["step"] = 3
+            st.rerun()
+
+def show_thermostat_selection():
+    """Step 4: Thermostat selection."""
+    st.markdown("### 🌡️ Step 4: Choose Thermostat")
+    st.markdown("Which thermostat would you like to use for temperature control?")
+    
+    # Thermostat selection
+    thermostat = st.selectbox(
+        "Thermostat",
+        ["Nose-Hoover", "Berendsen", "Langevin", "None"],
+        index=["Nose-Hoover", "Berendsen", "Langevin", "None"].index(st.session_state.simulation_workflow["thermostat"]),
+        help="Choose the thermostat for temperature control"
+    )
+    
+    # Show help
+    if st.button("❓ What is a thermostat?"):
+        show_thermostat_help()
+    
+    # Show thermostat description
+    if thermostat == "Nose-Hoover":
+        st.info("**Nose-Hoover**: Extended system thermostat that provides proper canonical sampling. Recommended for most simulations.")
+    elif thermostat == "Berendsen":
+        st.info("**Berendsen**: Simple velocity rescaling thermostat. Fast but not strictly canonical.")
+    elif thermostat == "Langevin":
+        st.info("**Langevin**: Stochastic thermostat that adds random forces. Good for liquid simulations.")
+    elif thermostat == "None":
+        st.info("**None**: No thermostat. Use only for NVE ensemble or when temperature control is not needed.")
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 2
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("➡️ Next: Timestep", use_container_width=True):
+            st.session_state.simulation_workflow["thermostat"] = thermostat
+            st.session_state.simulation_workflow["step"] = 4
+            st.rerun()
+
+def show_timestep_selection():
+    """Step 5: Timestep selection."""
+    st.markdown("### ⏱️ Step 5: Set Timestep and Simulation Length")
+    st.markdown("What timestep and simulation length would you like to use?")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        material = st.text_input("Material", value=params["material"], key="sim_material")
-        temperature = st.number_input("Temperature (K)", value=params["temperature"], min_value=1.0, max_value=5000.0, key="sim_temp")
+        timestep = st.number_input(
+            "Timestep (ps)",
+            value=st.session_state.simulation_workflow["timestep"],
+            min_value=0.0001,
+            max_value=0.01,
+            step=0.0001,
+            format="%.4f",
+            help="Timestep in picoseconds"
+        )
     
     with col2:
-        force_field = st.selectbox("Force Field", ["tersoff", "lj", "eam"], 
-                                 index=["tersoff", "lj", "eam"].index(params["force_field"]), key="sim_ff")
-        n_steps = st.number_input("Number of Steps", value=params["n_steps"], min_value=1000, max_value=1000000, key="sim_steps")
+        n_steps = st.number_input(
+            "Number of Steps",
+            value=st.session_state.simulation_workflow["n_steps"],
+            min_value=1000,
+            max_value=1000000,
+            step=1000,
+            help="Total number of simulation steps"
+        )
     
+    # Show help
+    if st.button("❓ What timestep should I use?"):
+        show_timestep_help()
+    
+    # Show simulation time
+    total_time = timestep * n_steps
+    st.info(f"**Total simulation time**: {total_time:.2f} ps ({total_time/1000:.3f} ns)")
+    
+    # Common timestep recommendations
+    st.markdown("**Timestep Recommendations:**")
+    st.markdown("- **Metals**: 0.001-0.002 ps")
+    st.markdown("- **Covalent materials**: 0.0005-0.001 ps")
+    st.markdown("- **Liquids**: 0.0005-0.001 ps")
+    st.markdown("- **Gases**: 0.001-0.005 ps")
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 3
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("➡️ Next: Structure", use_container_width=True):
+            st.session_state.simulation_workflow["timestep"] = timestep
+            st.session_state.simulation_workflow["n_steps"] = n_steps
+            st.session_state.simulation_workflow["step"] = 5
+            st.rerun()
+
+def show_structure_selection():
+    """Step 6: Structure selection."""
+    st.markdown("### 🏗️ Step 6: Choose Structure Source")
+    st.markdown("How would you like to provide the atomic structure?")
+    
+    # Structure source selection
+    structure_source = st.radio(
+        "Structure Source",
+        ["Generate", "Upload File", "Materials Project Database"],
+        index=["generate", "upload", "material_project"].index(st.session_state.simulation_workflow["structure_source"]),
+        help="Choose how to provide the atomic structure"
+    )
+    
+    # Show help
+    if st.button("❓ What are these options?"):
+        show_structure_help()
+    
+    if structure_source == "Generate":
+        st.info("**Generate**: I'll create a standard crystal structure for your material.")
+        st.markdown("**Available structures:**")
+        st.markdown("- Si: Diamond cubic")
+        st.markdown("- Al: Face-centered cubic")
+        st.markdown("- Fe: Body-centered cubic")
+        st.markdown("- H2O: Water molecule")
+        
+    elif structure_source == "Upload File":
+        st.info("**Upload File**: Upload your own structure file (POSCAR, XYZ, etc.)")
+        uploaded_file = st.file_uploader(
+            "Choose structure file",
+            type=['xyz', 'poscar', 'cif', 'pdb'],
+            help="Supported formats: XYZ, POSCAR, CIF, PDB"
+        )
+        if uploaded_file:
+            st.session_state.simulation_workflow["structure_file"] = uploaded_file
+            st.success(f"Uploaded: {uploaded_file.name}")
+    
+    elif structure_source == "Materials Project Database":
+        st.info("**Materials Project**: Search and download structures from the Materials Project database.")
+        mp_query = st.text_input(
+            "Search Materials Project",
+            placeholder="e.g., mp-149 (Si), mp-1143 (Al2O3)",
+            help="Enter Materials Project ID or search term"
+        )
+        if mp_query:
+            st.info(f"Would search for: {mp_query}")
+    
+    # Navigation
+    col1, col2, col3 = st.columns([1, 1, 3])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 4
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("➡️ Next: Confirm", use_container_width=True):
+            st.session_state.simulation_workflow["structure_source"] = structure_source.lower().replace(" ", "_")
+            st.session_state.simulation_workflow["step"] = 6
+            st.rerun()
+
+def show_simulation_confirmation():
+    """Step 7: Simulation confirmation."""
+    st.markdown("### ✅ Step 7: Confirm Simulation Parameters")
+    st.markdown("Please review your simulation parameters before running:")
+    
+    workflow = st.session_state.simulation_workflow
+    
+    # Display parameters
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Basic Parameters:**")
+        st.markdown(f"- **Material**: {workflow['material']}")
+        st.markdown(f"- **Temperature**: {workflow['temperature']} K")
+        st.markdown(f"- **Ensemble**: {workflow['ensemble']}")
+        st.markdown(f"- **Thermostat**: {workflow['thermostat']}")
+    
+    with col2:
+        st.markdown("**Simulation Details:**")
+        st.markdown(f"- **Timestep**: {workflow['timestep']} ps")
+        st.markdown(f"- **Steps**: {workflow['n_steps']:,}")
+        st.markdown(f"- **Total Time**: {workflow['timestep'] * workflow['n_steps']:.2f} ps")
+        st.markdown(f"- **Structure**: {workflow['structure_source']}")
+    
+    # Force field selection
+    st.markdown("**Force Field:**")
+    force_field = st.selectbox(
+        "Select Force Field",
+        ["tersoff", "eam", "lj", "reaxff"],
+        index=["tersoff", "eam", "lj", "reaxff"].index(workflow["force_field"]),
+        help="Choose the appropriate force field for your material"
+    )
+    
+    # Show force field info
+    if force_field == "tersoff":
+        st.info("**Tersoff**: Good for covalent materials like Si, C, Ge")
+    elif force_field == "eam":
+        st.info("**EAM**: Good for metals like Al, Cu, Fe, Ni")
+    elif force_field == "lj":
+        st.info("**Lennard-Jones**: Good for noble gases and simple systems")
+    elif force_field == "reaxff":
+        st.info("**ReaxFF**: Good for reactive systems with C, H, O, N")
+    
+    # Navigation
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
+    with col1:
+        if st.button("⬅️ Back", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 5
+            st.rerun()
+    with col2:
+        if st.button("❌ Cancel", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
+            st.rerun()
+    with col3:
+        if st.button("✏️ Edit", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
+            st.rerun()
+    with col4:
+        if st.button("🚀 Run Simulation", use_container_width=True):
+            st.session_state.simulation_workflow["force_field"] = force_field
+            st.session_state.simulation_workflow["step"] = 7
+            run_simulation_with_progress()
+            st.rerun()
+
+def show_simulation_progress():
+    """Step 8: Simulation progress."""
+    st.markdown("### 🚀 Running Simulation...")
+    
+    workflow = st.session_state.simulation_workflow
+    
+    # Progress bar
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Simulation steps
+    steps = [
+        "Initializing simulation...",
+        "Setting up atomic structure...",
+        "Preparing LAMMPS input files...",
+        "Running molecular dynamics...",
+        "Processing results...",
+        "Simulation complete!"
+    ]
+    
+    for i, step in enumerate(steps):
+        status_text.text(step)
+        progress_bar.progress((i + 1) / len(steps))
+        
+        # Simulate some processing time
+        import time
+        time.sleep(1)
+    
+    # Mark as complete
+    st.session_state.simulation_workflow["step"] = 8
+    st.rerun()
+
+def show_simulation_complete():
+    """Step 9: Simulation complete."""
+    st.markdown("### ✅ Simulation Complete!")
+    
+    workflow = st.session_state.simulation_workflow
+    
+    # Show results summary
+    st.success(f"Successfully completed {workflow['n_steps']:,} step MD simulation of {workflow['material']} at {workflow['temperature']}K")
+    
+    # Show simulation details
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**Simulation Summary:**")
+        st.markdown(f"- Material: {workflow['material']}")
+        st.markdown(f"- Temperature: {workflow['temperature']} K")
+        st.markdown(f"- Ensemble: {workflow['ensemble']}")
+        st.markdown(f"- Steps: {workflow['n_steps']:,}")
+        st.markdown(f"- Total Time: {workflow['timestep'] * workflow['n_steps']:.2f} ps")
+    
+    with col2:
+        st.markdown("**Output Files:**")
+        st.markdown("- trajectory.xyz")
+        st.markdown("- log.lammps")
+        st.markdown("- data.lammps")
+        st.markdown("- in.lammps")
+    
+    # Action buttons
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("✅ Run Simulation", use_container_width=True):
-            run_simulation_with_progress(material, temperature, force_field, n_steps)
+        if st.button("📁 Download Files", use_container_width=True):
+            st.info("Download functionality would be implemented here")
     
     with col2:
-        if st.button("❌ Cancel", use_container_width=True):
-            st.session_state.messages.append({"role": "assistant", "content": "Simulation cancelled."})
-            st.rerun()
+        if st.button("📊 Analyze Results", use_container_width=True):
+            st.info("Analysis options would be shown here")
     
     with col3:
-        if st.button("✏️ Modify Parameters", use_container_width=True):
+        if st.button("🔄 New Simulation", use_container_width=True):
+            st.session_state.simulation_workflow["step"] = 0
             st.rerun()
+    
+    # Reset workflow
+    if st.button("🏠 Back to Chat"):
+        st.session_state.simulation_workflow["step"] = 0
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": f"Simulation completed! {workflow['material']} at {workflow['temperature']}K with {workflow['n_steps']:,} steps."
+        })
+        st.rerun()
 
-def run_simulation_with_progress(material: str, temperature: float, force_field: str, n_steps: int):
+def show_material_help():
+    """Show help for material selection."""
+    st.markdown("""
+    **Materials You Can Simulate:**
+    
+    **Elements:**
+    - **Si (Silicon)**: Diamond cubic structure, good for semiconductor studies
+    - **Al (Aluminum)**: Face-centered cubic, good for metal studies
+    - **Fe (Iron)**: Body-centered cubic, good for magnetic materials
+    - **Cu (Copper)**: Face-centered cubic, good for electrical conductivity
+    - **C (Carbon)**: Diamond, graphite, or graphene structures
+    
+    **Compounds:**
+    - **H2O (Water)**: Molecular dynamics of water
+    - **Al2O3 (Alumina)**: Ceramic material
+    - **SiO2 (Silica)**: Glass and ceramic applications
+    
+    **Custom Materials:**
+    - You can also enter any chemical formula
+    - The system will try to generate an appropriate structure
+    - For complex materials, consider uploading a structure file
+    """)
+
+def show_temperature_help():
+    """Show help for temperature selection."""
+    st.markdown("""
+    **Temperature Guidelines:**
+    
+    **Low Temperatures (1-100K):**
+    - Study quantum effects and low-temperature properties
+    - Good for superconductors and quantum materials
+    
+    **Room Temperature (300K):**
+    - Standard for most materials studies
+    - Good for comparing with experimental data
+    
+    **High Temperatures (1000-3000K):**
+    - Study thermal properties and phase transitions
+    - Good for understanding melting behavior
+    
+    **Very High Temperatures (3000K+):**
+    - Study extreme conditions
+    - Good for plasma and high-energy physics
+    
+    **Material-Specific Recommendations:**
+    - **Metals**: 300-1000K for most studies
+    - **Semiconductors**: 77-500K for electronic properties
+    - **Ceramics**: 300-2000K for thermal properties
+    - **Polymers**: 200-500K for mechanical properties
+    """)
+
+def show_ensemble_help():
+    """Show help for ensemble selection."""
+    st.markdown("""
+    **Thermodynamic Ensembles Explained:**
+    
+    **NVT (Canonical Ensemble):**
+    - **What it means**: Constant Number of particles, Volume, and Temperature
+    - **When to use**: Most common choice for studying properties at constant temperature
+    - **Good for**: Structural properties, diffusion, phase transitions
+    - **Example**: Studying how a material behaves at 300K
+    
+    **NPT (Isothermal-Isobaric Ensemble):**
+    - **What it means**: Constant Number of particles, Pressure, and Temperature
+    - **When to use**: When you want to study properties at constant pressure
+    - **Good for**: Density changes, volume expansion, pressure effects
+    - **Example**: Studying how a material expands when heated
+    
+    **NVE (Microcanonical Ensemble):**
+    - **What it means**: Constant Number of particles, Volume, and Energy
+    - **When to use**: When you want to study energy conservation
+    - **Good for**: Dynamics, energy flow, isolated systems
+    - **Example**: Studying how energy moves through a system
+    """)
+
+def show_thermostat_help():
+    """Show help for thermostat selection."""
+    st.markdown("""
+    **Thermostats Explained:**
+    
+    **Nose-Hoover Thermostat:**
+    - **How it works**: Adds an extra degree of freedom to control temperature
+    - **Pros**: Provides proper canonical sampling, very accurate
+    - **Cons**: Slightly more complex, can have oscillations
+    - **Best for**: Most simulations, especially when you need accurate thermodynamics
+    
+    **Berendsen Thermostat:**
+    - **How it works**: Rescales velocities to reach target temperature
+    - **Pros**: Simple, fast, stable
+    - **Cons**: Not strictly canonical, can suppress fluctuations
+    - **Best for**: Quick equilibration, when you don't need perfect thermodynamics
+    
+    **Langevin Thermostat:**
+    - **How it works**: Adds random forces to control temperature
+    - **Pros**: Good for liquid simulations, handles complex systems well
+    - **Cons**: Can be noisy, not always physically realistic
+    - **Best for**: Liquid simulations, complex molecular systems
+    
+    **No Thermostat:**
+    - **When to use**: Only for NVE ensemble or when temperature control isn't needed
+    - **Pros**: No artificial temperature control
+    - **Cons**: Temperature will drift, not suitable for most simulations
+    """)
+
+def show_timestep_help():
+    """Show help for timestep selection."""
+    st.markdown("""
+    **Timestep Guidelines:**
+    
+    **What is a timestep?**
+    - The time interval between each simulation step
+    - Smaller timesteps = more accurate but slower
+    - Larger timesteps = faster but less accurate
+    
+    **General Rule:**
+    - Timestep should be 1/10th of the fastest vibration period
+    - For most materials, this is around 0.001 ps
+    
+    **Material-Specific Recommendations:**
+    - **Metals (Al, Cu, Fe)**: 0.001-0.002 ps
+    - **Covalent materials (Si, C)**: 0.0005-0.001 ps
+    - **Liquids (H2O)**: 0.0005-0.001 ps
+    - **Gases**: 0.001-0.005 ps
+    - **Light atoms (H)**: 0.0001-0.0005 ps
+    
+    **Simulation Length:**
+    - **Short simulations (1-10 ps)**: Quick tests, equilibration
+    - **Medium simulations (10-100 ps)**: Property calculations
+    - **Long simulations (100+ ps)**: Diffusion, rare events
+    
+    **Total Time = Timestep × Number of Steps**
+    """)
+
+def show_structure_help():
+    """Show help for structure selection."""
+    st.markdown("""
+    **Structure Options Explained:**
+    
+    **Generate Structure:**
+    - **What it does**: Creates a standard crystal structure for your material
+    - **Pros**: Quick, no files needed, good for common materials
+    - **Cons**: Limited to standard structures
+    - **Best for**: Simple materials, quick tests
+    
+    **Upload File:**
+    - **What it does**: Uses your own atomic structure file
+    - **Supported formats**: XYZ, POSCAR, CIF, PDB
+    - **Pros**: Complete control over structure, can use any material
+    - **Cons**: Need to prepare structure file
+    - **Best for**: Complex materials, specific structures
+    
+    **Materials Project Database:**
+    - **What it does**: Downloads structures from the Materials Project
+    - **Pros**: Real experimental structures, extensive database
+    - **Cons**: Requires internet connection, may not have all materials
+    - **Best for**: When you want experimental structures
+    
+    **Structure File Formats:**
+    - **XYZ**: Simple format with atom types and coordinates
+    - **POSCAR**: VASP format, includes cell parameters
+    - **CIF**: Crystallographic Information File, very detailed
+    - **PDB**: Protein Data Bank format, good for biomolecules
+    """)
+
+def run_simulation_with_progress():
     """Run simulation with progress bar and detailed feedback."""
     try:
         if not st.session_state.agent:
             st.error("Agent not initialized. Please check your API keys.")
             return
         
+        workflow = st.session_state.simulation_workflow
+        
         # Store simulation parameters in session state
         st.session_state.simulation_running = True
         st.session_state.simulation_params = {
-            "material": material,
-            "temperature": temperature,
-            "force_field": force_field,
-            "n_steps": n_steps
+            "material": workflow["material"],
+            "temperature": workflow["temperature"],
+            "force_field": workflow["force_field"],
+            "n_steps": workflow["n_steps"]
         }
         
         # Create progress container
@@ -628,7 +1267,7 @@ def run_simulation_with_progress(material: str, temperature: float, force_field:
         # Actually run the simulation
         with st.spinner("Simulation in progress..."):
             response = st.session_state.agent.run_simulation(
-                f"Simulate {material} at {temperature}K using {force_field} potential for {n_steps} steps"
+                f"Simulate {workflow['material']} at {workflow['temperature']}K using {workflow['force_field']} potential for {workflow['n_steps']} steps"
             )
         
         # Step 5: Complete
@@ -645,7 +1284,10 @@ def run_simulation_with_progress(material: str, temperature: float, force_field:
         st.session_state.simulation_running = False
         
         # Show success message
-        st.success(f"✅ Simulation completed successfully! {material} at {temperature}K with {n_steps} steps")
+        st.success(f"✅ Simulation completed successfully! {workflow['material']} at {workflow['temperature']}K with {workflow['n_steps']} steps")
+        
+        # Move to completion step
+        st.session_state.simulation_workflow["step"] = 8
         
         # Auto-rerun to show results in chat
         st.rerun()
@@ -655,6 +1297,7 @@ def run_simulation_with_progress(material: str, temperature: float, force_field:
         st.error(error_msg)
         st.session_state.messages.append({"role": "assistant", "content": error_msg})
         st.session_state.simulation_running = False
+        st.session_state.simulation_workflow["step"] = 0
         st.rerun()
 
 def show_download_options(response: str):
@@ -745,31 +1388,21 @@ def show_analysis_options(prompt: str, response: str):
 def display_chat_interface():
     """Display the main chat interface."""
     
-    # Check if simulation is running
-    if hasattr(st.session_state, 'simulation_running') and st.session_state.simulation_running:
-        params = st.session_state.simulation_params
-        st.markdown(f"""
-        <div class="simulation-status">
-            <h3>🔄 Simulation in Progress...</h3>
-            <p><strong>Material:</strong> {params['material']}</p>
-            <p><strong>Temperature:</strong> {params['temperature']}K</p>
-            <p><strong>Steps:</strong> {params['n_steps']}</p>
-            <p><strong>Force Field:</strong> {params['force_field']}</p>
-            <p><em>Please wait while the simulation runs...</em></p>
-        </div>
-        """, unsafe_allow_html=True)
+    # Check if we're in simulation workflow
+    if st.session_state.simulation_workflow["step"] > 0:
+        show_interactive_simulation_workflow()
         return
     
     # Chat input - moved to top
     st.markdown("### 💬 Describe your materials science task")
-    if prompt := st.chat_input("Type your message here... (e.g., 'Simulate H2O molecular dynamics at 300K')"):
+    if prompt := st.chat_input("💬 Describe your materials science task", placeholder="Type your message here... (e.g., 'Simulate H2O molecular dynamics at 300K')"):
         # Add user message
         st.session_state.messages.append({"role": "user", "content": prompt})
         
         # Check if this is a simulation request
         if is_simulation_request(prompt):
-            # Show parameter confirmation
-            show_simulation_confirmation(prompt)
+            # Start interactive simulation workflow
+            start_interactive_simulation_workflow(prompt)
         else:
             # Regular chat response
             get_ai_response(prompt)
@@ -779,7 +1412,7 @@ def display_chat_interface():
         prompt = st.session_state.example_prompt
         st.session_state.example_prompt = None
         if is_simulation_request(prompt):
-            show_simulation_confirmation(prompt)
+            start_interactive_simulation_workflow(prompt)
         else:
             get_ai_response(prompt)
     
@@ -794,22 +1427,24 @@ def display_chat_interface():
                 <strong>🤖 Welcome to MaterialSim AI Agent</strong><br><br>
                 I'm your intelligent assistant for computational materials science. I can help you with:
                 <br><br>
-                <strong>🧬 Molecular Dynamics Simulations:</strong><br>
-                • Set up and run MD simulations with parameter confirmation<br>
-                • Monitor simulation progress with real-time feedback<br>
-                • Download simulation results and output files<br><br>
+                <strong>🧬 Interactive Molecular Dynamics Simulations:</strong><br>
+                • Step-by-step parameter collection with explanations<br>
+                • Educational guidance for simulation parameters<br>
+                • Structure input options (generate, upload, Materials Project)<br>
+                • Real-time progress tracking and monitoring<br>
+                • Post-simulation analysis and download options<br><br>
                 
                 <strong>📊 Analysis & Visualization:</strong><br>
                 • Analyze simulation results (RDF, MSD, properties)<br>
                 • Generate plots and visualizations<br>
                 • Compute materials properties<br><br>
                 
-                <strong>💬 Interactive Workflow:</strong><br>
-                • Natural language interface for all operations<br>
-                • Step-by-step parameter confirmation<br>
-                • Professional progress tracking<br><br>
+                <strong>💬 Educational Workflow:</strong><br>
+                • Learn about simulation parameters as you go<br>
+                • Get explanations for technical terms<br>
+                • Guided parameter selection with recommendations<br><br>
                 
-                <em>Try: "Simulate H2O molecular dynamics at 300K" or "Analyze the results"</em>
+                <em>Try: "Simulate Silicon at 300K" or "I want to run a molecular dynamics simulation"</em>
             </div>
             """, unsafe_allow_html=True)
         

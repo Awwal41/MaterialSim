@@ -40,8 +40,8 @@ def install_dependencies():
         return False
 
 def launch_gui():
-    """Launch the pure Streamlit GUI."""
-    print("Launching MaterialSim AI Agent Pure GUI...")
+    """Launch the Streamlit GUI."""
+    print("Launching MaterialSim AI Agent GUI...")
     try:
         subprocess.run([
             sys.executable, "-m", "streamlit", "run", "gui_app.py",
@@ -90,12 +90,12 @@ def main():
             return
     
     # Launch GUI
-    print("🌐 Starting pure interface...")
+    print("🌐 Starting interface...")
     print("The GUI will open in your default web browser.")
     print("If it doesn't open automatically, go to: http://localhost:8501")
     print("\n🎯 Features:")
-    print("  • Completely non-hardcoded")
-    print("  • Pure frontend interface")
+    print("  • Completely dynamic")
+    print("  • Frontend interface")
     print("  • Full agent integration")
     print("  • Natural language interaction")
     print("  • All existing capabilities")

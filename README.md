@@ -54,7 +54,6 @@ See [INSTALL.md](docs/INSTALL.md) for comprehensive installation instructions in
 
 ### 🌐 Web GUI (Recommended for Beginners)
 ```bash
-# Launch the pure non-hardcoded interface (NEW!)
 python launch_gui.py
 
 # Or launch the integrated GUI

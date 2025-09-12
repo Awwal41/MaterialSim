@@ -11,7 +11,7 @@ help:
 	@echo "test-gui   - Test GUI components"
 	@echo "gui        - Launch web GUI"
 	@echo "gui-v2     - Launch enhanced conversational GUI"
-	@echo "gui-integrated - Launch fully integrated GUI (no hardcoding)"
+	@echo "gui-integrated - Launch fully integrated GUI"
 	@echo "build      - Build the package"
 	@echo "docs       - Generate documentation"
 	@echo "examples   - Run example scripts"
@@ -45,7 +45,7 @@ gui-v2:
 	python launch_gui_v2.py
 
 gui-integrated:
-	@echo "Launching fully integrated GUI (no hardcoding)..."
+	@echo "Launching fully integrated GUI..."
 	python launch_integrated_gui.py
 
 build:
