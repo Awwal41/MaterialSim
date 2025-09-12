@@ -168,7 +168,7 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
             self.logger.info(f"Running simulation: {instruction}")
             
             # Parse the instruction to extract simulation parameters
-            material, temperature, force_field = self._parse_simulation_instruction(instruction)
+            material, temperature, force_field, n_steps = self._parse_simulation_instruction(instruction)
             
             # Use simple simulation function
             from ..simple_simulation import run_simple_simulation
@@ -177,6 +177,7 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
             result = run_simple_simulation(
                 material=material,
                 temperature=temperature,
+                n_steps=n_steps,
                 force_field=force_field
             )
             
@@ -196,7 +197,7 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
             instruction: Natural language instruction
             
         Returns:
-            Tuple of (material, temperature, force_field)
+            Tuple of (material, temperature, force_field, n_steps)
         """
         from .materials_database import MaterialsDatabase
         
@@ -243,7 +244,15 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
                 force_field = ff
                 break
         
-        return material, temperature, force_field
+        # Extract number of steps
+        n_steps = self.config.default_n_steps
+        steps_match = re.search(r'(\d+)\s*steps?', instruction_lower)
+        if steps_match:
+            n_steps = int(steps_match.group(1))
+            # Ensure n_steps is within limits
+            n_steps = max(self.config.min_n_steps, min(n_steps, self.config.max_n_steps))
+        
+        return material, temperature, force_field, n_steps
     
     def analyze_results(self, simulation_path: str) -> Dict[str, Any]:
         """Analyze simulation results.

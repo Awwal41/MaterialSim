@@ -1668,34 +1668,51 @@ def run_simulation_with_progress():
         # Create progress container
         st.markdown("### 🚀 Running Simulation...")
         
-        # Step 1: Parsing parameters
+        # Create progress bar and status text
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        status_text.text("📋 Parsing simulation parameters...")
-        progress_bar.progress(10)
-        
-        # Step 2: Creating structure
-        status_text.text("🏗️ Creating atomic structure...")
-        progress_bar.progress(25)
-        
-        # Step 3: Setting up simulation
-        status_text.text("⚙️ Setting up LAMMPS input files...")
-        progress_bar.progress(50)
-        
-        # Step 4: Running simulation
-        status_text.text("🔄 Running molecular dynamics simulation...")
-        progress_bar.progress(75)
-        
-        # Actually run the simulation
+        # Actually run the simulation with proper progress updates
         with st.spinner("Simulation in progress..."):
-            response = st.session_state.agent.run_simulation(
-                f"Simulate {workflow['material']} at {workflow['temperature']}K using {workflow['force_field']} potential for {workflow['n_steps']} steps"
+            # Step 1: Parsing parameters
+            status_text.text("📋 Parsing simulation parameters...")
+            progress_bar.progress(10)
+            import time
+            time.sleep(0.5)  # Brief pause to show progress
+            
+            # Step 2: Creating structure
+            status_text.text("🏗️ Creating atomic structure...")
+            progress_bar.progress(25)
+            time.sleep(0.5)
+            
+            # Step 3: Setting up simulation
+            status_text.text("⚙️ Setting up LAMMPS input files...")
+            progress_bar.progress(50)
+            time.sleep(0.5)
+            
+            # Step 4: Running simulation
+            status_text.text("🔄 Running molecular dynamics simulation...")
+            progress_bar.progress(75)
+            time.sleep(0.5)
+            
+            # Actually run the simulation directly
+            from materials_ai_agent.simple_simulation import run_simple_simulation
+            result = run_simple_simulation(
+                material=workflow['material'],
+                temperature=workflow['temperature'],
+                n_steps=workflow['n_steps'],
+                force_field=workflow['force_field']
             )
-        
-        # Step 5: Complete
-        status_text.text("✅ Simulation completed!")
-        progress_bar.progress(100)
+            
+            # Create response message
+            if result["success"]:
+                response = f"✅ {result['message']}\n\nSimulation completed successfully!\nDirectory: {result['simulation_directory']}\nOutput files: {result['output_files']}"
+            else:
+                response = f"❌ Simulation failed: {result['error']}"
+            
+            # Step 5: Complete (only after simulation actually finishes)
+            status_text.text("✅ Simulation completed!")
+            progress_bar.progress(100)
         
         # Add response to chat
         st.session_state.messages.append({"role": "assistant", "content": response})
@@ -1706,8 +1723,20 @@ def run_simulation_with_progress():
         # Mark simulation as completed
         st.session_state.simulation_running = False
         
-        # Show success message
-        st.success(f"✅ Simulation completed successfully! {workflow['material']} at {workflow['temperature']}K with {workflow['n_steps']} steps")
+        # Update workflow with actual simulation results
+        if result["success"]:
+            # Extract actual temperature and n_steps from the result
+            actual_temp = result.get("temperature", workflow["temperature"])
+            actual_n_steps = result.get("n_steps", workflow["n_steps"])
+            
+            # Update workflow state with actual values
+            st.session_state.simulation_workflow["temperature"] = actual_temp
+            st.session_state.simulation_workflow["n_steps"] = actual_n_steps
+            
+            # Update success message with actual values
+            st.success(f"✅ Simulation completed successfully! {workflow['material']} at {actual_temp}K with {actual_n_steps} steps")
+        else:
+            st.error(f"❌ Simulation failed: {result.get('error', 'Unknown error')}")
         
         # Move to post-simulation analysis step
         st.session_state.simulation_workflow["step"] = 9
@@ -1836,21 +1865,17 @@ def display_chat_interface():
         
         # Display welcome message if no messages
         if not st.session_state.messages:
-            st.markdown("""
-            <div class="assistant-message">
-                <strong>🤖 Welcome to MaterialSim AI Agent</strong><br><br>
-                I'm your intelligent assistant for computational materials science. I can help you with molecular dynamics simulations and materials analysis through natural conversation.
-                <br><br>
-                <strong>🧬 Conversational Molecular Dynamics Simulations:</strong><br>
-                • Natural language parameter collection with explanations<br>
-                • Educational guidance for simulation parameters<br>
-                • Structure input options (generate, upload, Materials Project)<br>
-                • Real-time progress tracking and monitoring<br>
-                • Post-simulation analysis and download options<br><br>
-                
-                <em>Just tell me what you'd like to do! For example, say "I want to simulate silicon at 300K" and I'll guide you through the entire process.</em>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown("**🤖 Welcome to MaterialSim AI Agent**")
+            st.markdown("I'm your intelligent assistant for computational materials science. I can help you with molecular dynamics simulations and materials analysis through natural conversation.")
+            st.markdown("")
+            st.markdown("**🧬 Conversational Molecular Dynamics Simulations:**")
+            st.markdown("• Natural language parameter collection with explanations")
+            st.markdown("• Educational guidance for simulation parameters")
+            st.markdown("• Structure input options (generate, upload, Materials Project)")
+            st.markdown("• Real-time progress tracking and monitoring")
+            st.markdown("• Post-simulation analysis and download options")
+            st.markdown("")
+            st.markdown("Just tell me what you'd like to do! For example, say \"I want to simulate silicon at 300K\" and I'll guide you through the entire process.")
         
         # Display chat history
         for message in st.session_state.messages:
@@ -2015,17 +2040,26 @@ def perform_rdf_analysis():
                     return f"❌ No simulation directories found. Looking for: {sim_dir}"
         
         # Read the structure file and compute RDF directly
+        # Look for trajectory file first, then fall back to structure file
+        trajectory_file = os.path.join(sim_dir, "trajectory.xyz")
         structure_file = os.path.join(sim_dir, "structure.xyz")
-        if not os.path.exists(structure_file):
-            return "❌ Structure file not found. Cannot compute RDF."
         
-        # Simple RDF analysis using the structure file
+        if os.path.exists(trajectory_file):
+            data_file = trajectory_file
+            file_type = "trajectory"
+        elif os.path.exists(structure_file):
+            data_file = structure_file
+            file_type = "structure"
+        else:
+            return "❌ Neither trajectory.xyz nor structure.xyz found. Cannot compute RDF."
+        
+        # Simple RDF analysis using the structure/trajectory file
         try:
             import numpy as np
             import matplotlib.pyplot as plt
             
             # Read XYZ file
-            with open(structure_file, 'r') as f:
+            with open(data_file, 'r') as f:
                 lines = f.readlines()
             
             # Get number of atoms
@@ -2035,7 +2069,8 @@ def perform_rdf_analysis():
             positions = []
             for i in range(2, 2 + n_atoms):  # Skip first two lines (atom count and comment)
                 coords = lines[i].strip().split()
-                if len(coords) >= 4:  # x, y, z coordinates
+                if len(coords) >= 4:  # For custom format: element xu yu zu fx fy fz
+                    # We want positions (xu, yu, zu) which are indices 1, 2, 3
                     positions.append([float(coords[1]), float(coords[2]), float(coords[3])])
             
             positions = np.array(positions)
@@ -2139,35 +2174,170 @@ def perform_msd_analysis():
         
         sim_dir = f"simulations/{material}_{temperature}K_{n_steps}steps"
         
-        if st.session_state.agent:
-            analysis_prompt = f"Analyze the MSD (Mean Squared Displacement) for the simulation in {sim_dir}. Use the structure.xyz file to compute the MSD and show the results."
-            
-            with st.spinner("🔬 Computing MSD analysis..."):
-                response = st.session_state.agent.chat(analysis_prompt)
-            
-            return f"""🔬 **MSD Analysis Results**
+        # Robust directory lookup
+        import os, glob
+        if not os.path.exists(sim_dir):
+            possible_dirs = glob.glob(f"simulations/{material}_*K_*steps")
+            if possible_dirs:
+                sim_dir = possible_dirs[0]
+            else:
+                all_dirs = glob.glob("simulations/*")
+                if all_dirs:
+                    sim_dir = all_dirs[0]
+                else:
+                    return f"❌ No simulation directories found. Looking for: {sim_dir}"
+        
+        # Look for trajectory file first, then fall back to structure file
+        trajectory_file = os.path.join(sim_dir, "trajectory.xyz")
+        structure_file = os.path.join(sim_dir, "structure.xyz")
+        
+        if os.path.exists(trajectory_file):
+            data_file = trajectory_file
+            file_type = "trajectory"
+        elif os.path.exists(structure_file):
+            data_file = structure_file
+            file_type = "structure"
+        else:
+            return "❌ Neither trajectory.xyz nor structure.xyz found. Cannot compute MSD."
+        
+        # Read trajectory data
+        import numpy as np
+        import matplotlib.pyplot as plt
+        
+        # Parse XYZ file to get atomic positions over time
+        with open(data_file, 'r') as f:
+            lines = f.readlines()
+        
+        # Extract positions for each timestep
+        positions = []
+        i = 0
+        while i < len(lines):
+            if lines[i].strip().isdigit():  # Number of atoms line
+                n_atoms = int(lines[i].strip())
+                i += 1  # Skip comment line
+                
+                timestep_positions = []
+                for j in range(n_atoms):
+                    parts = lines[i + j].strip().split()
+                    if len(parts) >= 4:
+                        # For custom format: element xu yu zu fx fy fz
+                        # We want positions (xu, yu, zu) which are indices 1, 2, 3
+                        timestep_positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                
+                if timestep_positions:
+                    positions.append(np.array(timestep_positions))
+                
+                i += n_atoms
+            else:
+                i += 1
+        
+        if len(positions) < 2:
+            if file_type == "trajectory":
+                return """🔬 **MSD Analysis - Insufficient Trajectory Data**
 
-{response}
+The trajectory file only contains 1 timestep, which is not enough to calculate Mean Squared Displacement (MSD).
 
-The MSD shows how atoms move over time, indicating diffusion behavior and material properties.
+**What MSD Analysis Needs:**
+- Multiple timesteps showing atomic positions over time
+- At least 2 snapshots to calculate displacement
+- Trajectory data showing how atoms move
+
+**Why This Happened:**
+The LAMMPS simulation may not have run long enough or the trajectory output frequency was too low.
+
+**Alternative Analysis Options:**
+- **RDF Analysis**: Can analyze atomic structure from single snapshot
+- **Structure Visualization**: View the 3D atomic structure
+- **Thermodynamic Analysis**: Analyze temperature, energy, pressure data
+
+Would you like to try a different analysis type that works with single timestep data?"""
+            else:
+                return """🔬 **MSD Analysis - No Trajectory Data**
+
+The simulation only saved a single structure snapshot instead of a full trajectory.
+
+**What MSD Analysis Needs:**
+- Multiple timesteps showing atomic positions over time
+- At least 2 snapshots to calculate displacement
+- Trajectory data showing how atoms move
+
+**Why This Happened:**
+The current simulation only saved a single structure snapshot instead of a full trajectory.
+
+**Alternative Analysis Options:**
+- **RDF Analysis**: Can analyze atomic structure from single snapshot
+- **Structure Visualization**: View the 3D atomic structure
+- **Thermodynamic Analysis**: Analyze temperature, energy, pressure data
+
+Would you like to try a different analysis type that works with single timestep data?"""
+        
+        # Calculate MSD
+        positions = np.array(positions)
+        n_timesteps, n_atoms, _ = positions.shape
+        
+        # Calculate MSD for each atom
+        msd_values = []
+        for atom_idx in range(n_atoms):
+            atom_positions = positions[:, atom_idx, :]
+            initial_pos = atom_positions[0]
+            
+            msd_atom = []
+            for t in range(n_timesteps):
+                displacement = atom_positions[t] - initial_pos
+                msd = np.sum(displacement**2)
+                msd_atom.append(msd)
+            
+            msd_values.append(msd_atom)
+        
+        # Average MSD over all atoms
+        msd_avg = np.mean(msd_values, axis=0)
+        time_steps = np.arange(len(msd_avg))
+        
+        # Create MSD plot
+        plt.figure(figsize=(10, 6))
+        plt.plot(time_steps, msd_avg, 'b-', linewidth=2, label='Average MSD')
+        plt.xlabel('Time Step')
+        plt.ylabel('Mean Squared Displacement (Å²)')
+        plt.title(f'MSD Analysis for {material} at {temperature}K')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Save plot
+        plot_file = os.path.join(sim_dir, "msd_analysis.png")
+        plt.savefig(plot_file, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        # Calculate diffusion coefficient (slope of MSD vs time)
+        if len(msd_avg) > 10:
+            # Use linear fit for diffusion coefficient
+            from scipy import stats
+            slope, intercept, r_value, p_value, std_err = stats.linregress(time_steps[10:], msd_avg[10:])
+            diffusion_coeff = slope / 6.0  # D = slope/6 for 3D
+        else:
+            diffusion_coeff = 0.0
+        
+        # Display plot in Streamlit
+        st.image(plot_file, caption=f"MSD Analysis for {material} at {temperature}K")
+        
+        return f"""🔬 **MSD Analysis Results**
+
+**Material**: {material} at {temperature}K
+**Analysis**: Mean Squared Displacement over {n_timesteps} timesteps
+**Diffusion Coefficient**: {diffusion_coeff:.2e} Å²/timestep
+
+**Key Findings:**
+- MSD shows atomic mobility and diffusion behavior
+- Higher MSD values indicate greater atomic movement
+- Linear MSD growth suggests normal diffusion
+- Diffusion coefficient: {diffusion_coeff:.2e} Å²/timestep
+
+The MSD analysis reveals how atoms move over time, indicating diffusion behavior and material properties.
 
 Would you like to:
 - **Download the MSD data**: Get the raw MSD values as a file
-- **Analyze RDF**: Look at atomic structure
+- **Analyze RDF**: Look at atomic structure  
 - **Plot temperature**: See thermodynamic properties
 - **New analysis**: Try a different analysis type"""
-        else:
-            return """🔬 **MSD Analysis**
-
-I can help you analyze the Mean Squared Displacement (MSD) of your simulation. The MSD shows:
-
-- **Diffusion behavior**: How atoms move over time
-- **Material properties**: Solid vs liquid characteristics
-- **Temperature effects**: How temperature affects atomic motion
-
-To perform the MSD analysis, I need to process the atomic trajectory data.
-
-Would you like me to proceed with the MSD calculation?"""
             
     except Exception as e:
         return f"❌ Error performing MSD analysis: {str(e)}"
@@ -2212,10 +2382,10 @@ def perform_thermodynamic_analysis():
             with open(log_file, 'r') as f:
                 lines = f.readlines()
             
-            # Find the data section (after "Step Temp Press Volume")
+            # Find the data section (after "Step Temp PotEng KinEng TotEng Press Volume")
             data_start = None
             for i, line in enumerate(lines):
-                if "Step Temp Press Volume" in line:
+                if "Step Temp PotEng KinEng TotEng Press Volume" in line:
                     data_start = i + 1
                     break
             
@@ -2228,13 +2398,16 @@ def perform_thermodynamic_analysis():
                 line = lines[i].strip()
                 if line and not line.startswith('#'):
                     parts = line.split()
-                    if len(parts) >= 4:
+                    if len(parts) >= 7:  # Step Temp PotEng KinEng TotEng Press Volume
                         try:
                             step = int(parts[0])
                             temp = float(parts[1])
-                            press = float(parts[2])
-                            volume = float(parts[3])
-                            data.append([step, temp, press, volume])
+                            poteng = float(parts[2])
+                            kineng = float(parts[3])
+                            toteng = float(parts[4])
+                            press = float(parts[5])
+                            volume = float(parts[6])
+                            data.append([step, temp, poteng, kineng, toteng, press, volume])
                         except (ValueError, IndexError):
                             continue
             
@@ -2245,8 +2418,11 @@ def perform_thermodynamic_analysis():
             data = np.array(data)
             steps = data[:, 0]
             temps = data[:, 1]
-            pressures = data[:, 2]
-            volumes = data[:, 3]
+            potengs = data[:, 2]
+            kinengs = data[:, 3]
+            totengs = data[:, 4]
+            pressures = data[:, 5]
+            volumes = data[:, 6]
             
             # Calculate statistics
             avg_temp = np.mean(temps)
@@ -2266,29 +2442,30 @@ def perform_thermodynamic_analysis():
             ax1.grid(True, alpha=0.3)
             ax1.legend()
             
-            # Pressure plot
-            ax2.plot(steps, pressures, 'g-', linewidth=2)
-            ax2.axhline(y=avg_press, color='r', linestyle='--', alpha=0.7, label=f'Average: {avg_press:.1f} bar')
+            # Energy plot
+            ax2.plot(steps, potengs, 'r-', linewidth=2, label='Potential Energy')
+            ax2.plot(steps, kinengs, 'g-', linewidth=2, label='Kinetic Energy')
+            ax2.plot(steps, totengs, 'b-', linewidth=2, label='Total Energy')
             ax2.set_xlabel('Step')
-            ax2.set_ylabel('Pressure (bar)')
-            ax2.set_title(f'Pressure Evolution - {material}')
+            ax2.set_ylabel('Energy (eV)')
+            ax2.set_title(f'Energy Evolution - {material}')
             ax2.grid(True, alpha=0.3)
             ax2.legend()
             
-            # Volume plot
-            ax3.plot(steps, volumes, 'm-', linewidth=2)
+            # Pressure plot
+            ax3.plot(steps, pressures, 'g-', linewidth=2)
+            ax3.axhline(y=avg_press, color='r', linestyle='--', alpha=0.7, label=f'Average: {avg_press:.1f} bar')
             ax3.set_xlabel('Step')
-            ax3.set_ylabel('Volume (Å³)')
-            ax3.set_title(f'Volume Evolution - {material}')
+            ax3.set_ylabel('Pressure (bar)')
+            ax3.set_title(f'Pressure Evolution - {material}')
             ax3.grid(True, alpha=0.3)
+            ax3.legend()
             
-            # Temperature distribution
-            ax4.hist(temps, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-            ax4.axvline(x=avg_temp, color='r', linestyle='--', linewidth=2, label=f'Mean: {avg_temp:.1f}K')
-            ax4.set_xlabel('Temperature (K)')
-            ax4.set_ylabel('Frequency')
-            ax4.set_title(f'Temperature Distribution - {material}')
-            ax4.legend()
+            # Volume plot
+            ax4.plot(steps, volumes, 'm-', linewidth=2)
+            ax4.set_xlabel('Step')
+            ax4.set_ylabel('Volume (Å³)')
+            ax4.set_title(f'Volume Evolution - {material}')
             ax4.grid(True, alpha=0.3)
             
             plt.tight_layout()

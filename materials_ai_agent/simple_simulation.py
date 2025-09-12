@@ -126,6 +126,11 @@ pair_coeff {pair_coeff}
 compute new all temp
 velocity all create {temperature} 12345 mom yes rot yes dist gaussian
 
+# Setup trajectory output
+variable iofrq equal 2
+dump 1 all custom ${{iofrq}} trajectory.xyz element xu yu zu fx fy fz
+dump_modify 1 sort id
+
 # Run simulation
 fix 1 all nvt temp {temperature} {temperature} 0.1
 thermo 100
@@ -157,17 +162,36 @@ def run_lammps_simulation(input_file: Path, output_file: Path):
 
 def create_mock_simulation(input_file: Path, output_file: Path):
     """Create a mock simulation output for testing."""
-    # Read the input file to get the actual temperature
+    # Read the input file to get the actual temperature and parameters
     try:
         input_content = input_file.read_text()
         import re
+        
+        # Extract temperature
         temp_match = re.search(r'velocity all create (\d+(?:\.\d+)?)', input_content)
         if temp_match:
             temperature = float(temp_match.group(1))
         else:
             temperature = 300.0  # Default fallback
+            
+        # Extract number of steps
+        steps_match = re.search(r'run (\d+)', input_content)
+        if steps_match:
+            n_steps = int(steps_match.group(1))
+        else:
+            n_steps = 10000  # Default fallback
+            
+        # Extract output frequency
+        freq_match = re.search(r'variable iofrq equal (\d+)', input_content)
+        if freq_match:
+            output_freq = int(freq_match.group(1))
+        else:
+            output_freq = 100  # Default fallback
+            
     except:
-        temperature = 300.0  # Default fallback
+        temperature = 300.0
+        n_steps = 10000
+        output_freq = 100
     
     mock_output = f"""LAMMPS (15 Apr 2024)
 Running on 1 processor of 1 node
@@ -241,6 +265,56 @@ Total wall time: 0:00:00
 """
     
     output_file.write_text(mock_output)
+    
+    # Also create a mock trajectory file
+    trajectory_file = input_file.parent / "trajectory.xyz"
+    create_mock_trajectory(trajectory_file, temperature, n_steps, output_freq)
+
+
+def create_mock_trajectory(trajectory_file: Path, temperature: float, n_steps: int, output_freq: int):
+    """Create a mock trajectory file for testing."""
+    import numpy as np
+    
+    # Create a simple 8-atom Si structure
+    n_atoms = 8
+    lattice_param = 5.43
+    
+    # Initial positions (simple cubic)
+    positions = np.array([
+        [0.0, 0.0, 0.0],
+        [lattice_param/2, lattice_param/2, 0.0],
+        [lattice_param/2, 0.0, lattice_param/2],
+        [0.0, lattice_param/2, lattice_param/2],
+        [lattice_param, 0.0, 0.0],
+        [lattice_param, lattice_param/2, lattice_param/2],
+        [lattice_param/2, lattice_param, 0.0],
+        [0.0, lattice_param, lattice_param/2]
+    ])
+    
+    # Generate trajectory data
+    trajectory_content = ""
+    timestep = 0
+    
+    while timestep <= n_steps:
+        if timestep % output_freq == 0:
+            # Add timestep header
+            trajectory_content += f"{n_atoms}\n"
+            trajectory_content += f"Lattice=\"5.43 0.0 0.0 0.0 5.43 0.0 0.0 0.0 5.43\" Properties=species:S:1:pos:R:3:force:R:3 Time={timestep}\n"
+            
+            # Add atomic positions with some random motion
+            for i, pos in enumerate(positions):
+                # Add small random displacement for trajectory effect
+                displacement = np.random.normal(0, 0.1, 3) * (timestep / n_steps)
+                current_pos = pos + displacement
+                
+                # Add some random force
+                force = np.random.normal(0, 0.5, 3)
+                
+                trajectory_content += f"Si {current_pos[0]:.6f} {current_pos[1]:.6f} {current_pos[2]:.6f} {force[0]:.6f} {force[1]:.6f} {force[2]:.6f}\n"
+        
+        timestep += output_freq
+    
+    trajectory_file.write_text(trajectory_content)
 
 
 def create_structure_from_properties(material: str, props) -> Atoms:
