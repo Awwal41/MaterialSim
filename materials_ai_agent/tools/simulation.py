@@ -21,13 +21,13 @@ from ..md.lammps_interface import LAMMPSInterface
 class SimulationParameters(BaseModel):
     """Parameters for MD simulation."""
     material: str = Field(..., description="Material formula or structure")
-    temperature: float = Field(300.0, description="Temperature in K")
-    pressure: float = Field(1.0, description="Pressure in atm")
-    timestep: float = Field(0.001, description="Timestep in ps")
-    n_steps: int = Field(10000, description="Number of simulation steps")
-    ensemble: str = Field("NVT", description="Thermodynamic ensemble")
-    force_field: str = Field("tersoff", description="Force field to use")
-    output_frequency: int = Field(100, description="Output frequency")
+    temperature: float = Field(None, description="Temperature in K (uses config default if None)")
+    pressure: float = Field(None, description="Pressure in atm (uses config default if None)")
+    timestep: float = Field(None, description="Timestep in ps (uses config default if None)")
+    n_steps: int = Field(None, description="Number of simulation steps (uses config default if None)")
+    ensemble: str = Field(None, description="Thermodynamic ensemble (uses config default if None)")
+    force_field: str = Field(None, description="Force field to use (uses config default if None)")
+    output_frequency: int = Field(None, description="Output frequency (uses config default if None)")
 
 
 class SimulationTool(BaseMaterialsTool):
@@ -43,30 +43,45 @@ class SimulationTool(BaseMaterialsTool):
     def setup_simulation(
         self,
         material: str,
-        temperature: float = 300.0,
-        pressure: float = 1.0,
-        timestep: float = 0.001,
-        n_steps: int = 10000,
-        ensemble: str = "NVT",
-        force_field: str = "tersoff",
-        output_frequency: int = 100
+        temperature: float = None,
+        pressure: float = None,
+        timestep: float = None,
+        n_steps: int = None,
+        ensemble: str = None,
+        force_field: str = None,
+        output_frequency: int = None
     ) -> Dict[str, Any]:
         """Set up a molecular dynamics simulation.
         
         Args:
             material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
-            temperature: Temperature in K
-            pressure: Pressure in atm
-            timestep: Timestep in ps
-            n_steps: Number of simulation steps
-            ensemble: Thermodynamic ensemble (NVT, NPT, NVE)
-            force_field: Force field to use (tersoff, lj, eam, etc.)
-            output_frequency: How often to output data
+            temperature: Temperature in K (uses config default if None)
+            pressure: Pressure in atm (uses config default if None)
+            timestep: Timestep in ps (uses config default if None)
+            n_steps: Number of simulation steps (uses config default if None)
+            ensemble: Thermodynamic ensemble (uses config default if None)
+            force_field: Force field to use (uses config default if None)
+            output_frequency: How often to output data (uses config default if None)
             
         Returns:
             Dictionary containing simulation setup information
         """
         try:
+            # Use configuration defaults if not provided
+            if temperature is None:
+                temperature = self.config.default_temperature
+            if pressure is None:
+                pressure = self.config.default_pressure
+            if timestep is None:
+                timestep = self.config.default_timestep
+            if n_steps is None:
+                n_steps = self.config.default_n_steps
+            if ensemble is None:
+                ensemble = self.config.default_ensemble
+            if force_field is None:
+                force_field = self.config.default_force_field
+            if output_frequency is None:
+                output_frequency = 100  # Default output frequency
             self._validate_input(locals())
             
             # Create simulation parameters
@@ -152,22 +167,29 @@ class SimulationTool(BaseMaterialsTool):
     def run_md_simulation(
         self,
         material: str,
-        temperature: float = 300.0,
-        n_steps: int = 10000,
-        force_field: str = "tersoff"
+        temperature: float = None,
+        n_steps: int = None,
+        force_field: str = None
     ) -> Dict[str, Any]:
         """Run a complete molecular dynamics simulation from start to finish.
         
         Args:
             material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
-            temperature: Temperature in K
-            n_steps: Number of simulation steps
-            force_field: Force field to use (tersoff, lj, eam, etc.)
+            temperature: Temperature in K (uses config default if None)
+            n_steps: Number of simulation steps (uses config default if None)
+            force_field: Force field to use (uses config default if None)
             
         Returns:
             Dictionary containing simulation results
         """
         try:
+            # Use configuration defaults if not provided
+            if temperature is None:
+                temperature = self.config.default_temperature
+            if n_steps is None:
+                n_steps = self.config.default_n_steps
+            if force_field is None:
+                force_field = self.config.default_force_field
             # First set up the simulation
             setup_result = self.setup_simulation(
                 material=material,
@@ -341,9 +363,9 @@ def create_simulation_tools(config):
     @tool
     def run_md_simulation(
         material: str,
-        temperature: float = 300.0,
-        n_steps: int = 10000,
-        force_field: str = "tersoff"
+        temperature: float = None,
+        n_steps: int = None,
+        force_field: str = None
     ) -> str:
         """Run a complete molecular dynamics simulation from start to finish.
         
@@ -371,13 +393,13 @@ def create_simulation_tools(config):
     @tool
     def setup_simulation(
         material: str,
-        temperature: float = 300.0,
-        pressure: float = 1.0,
-        timestep: float = 0.001,
-        n_steps: int = 10000,
-        ensemble: str = "NVT",
-        force_field: str = "tersoff",
-        output_frequency: int = 100
+        temperature: float = None,
+        pressure: float = None,
+        timestep: float = None,
+        n_steps: int = None,
+        ensemble: str = None,
+        force_field: str = None,
+        output_frequency: int = None
     ) -> str:
         """Set up a molecular dynamics simulation.
         

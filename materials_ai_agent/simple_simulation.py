@@ -13,38 +13,49 @@ import numpy as np
 
 def run_simple_simulation(
     material: str,
-    temperature: float = 300.0,
-    n_steps: int = 10000,
-    force_field: str = "tersoff"
+    temperature: float = None,
+    n_steps: int = None,
+    force_field: str = None
 ) -> Dict[str, Any]:
     """Run a simple molecular dynamics simulation.
     
     Args:
         material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
-        temperature: Temperature in K
-        n_steps: Number of simulation steps
-        force_field: Force field to use (tersoff, lj, eam, etc.)
+        temperature: Temperature in K (uses config default if None)
+        n_steps: Number of simulation steps (uses config default if None)
+        force_field: Force field to use (uses config default if None)
         
     Returns:
         Dictionary containing simulation results
     """
     try:
+        # Load configuration and materials database
+        from .core.config import Config
+        from .core.materials_database import MaterialsDatabase
+        
+        config = Config.from_env()
+        materials_db = MaterialsDatabase()
+        
+        # Use defaults from config if not provided
+        if temperature is None:
+            temperature = config.default_temperature
+        if n_steps is None:
+            n_steps = config.default_n_steps
+        if force_field is None:
+            force_field = config.default_force_field
+        
         # Create simulation directory
         sim_dir = Path("simulations") / f"{material}_{temperature}K_{n_steps}steps"
         sim_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create atomic structure
-        if material.upper() == "SI":
-            atoms = bulk("Si", "diamond", a=5.43)
-        elif material.upper() == "AL":
-            atoms = bulk("Al", "fcc", a=4.05)
-        elif material.upper() == "CU":
-            atoms = bulk("Cu", "fcc", a=3.61)
-        elif material.upper() == "FE":
-            atoms = bulk("Fe", "bcc", a=2.87)
+        # Get material properties from database
+        material_props = materials_db.get_material(material)
+        if material_props:
+            # Use database parameters
+            atoms = create_structure_from_properties(material, material_props)
         else:
-            # Default: simple cubic
-            atoms = bulk(material, "sc", a=3.0)
+            # Fallback to simple structure generation
+            atoms = create_simple_structure(material)
         
         # Write structure file
         structure_file = sim_dir / "structure.xyz"
@@ -146,6 +157,18 @@ def run_lammps_simulation(input_file: Path, output_file: Path):
 
 def create_mock_simulation(input_file: Path, output_file: Path):
     """Create a mock simulation output for testing."""
+    # Read the input file to get the actual temperature
+    try:
+        input_content = input_file.read_text()
+        import re
+        temp_match = re.search(r'velocity all create (\d+(?:\.\d+)?)', input_content)
+        if temp_match:
+            temperature = float(temp_match.group(1))
+        else:
+            temperature = 300.0  # Default fallback
+    except:
+        temperature = 300.0  # Default fallback
+    
     mock_output = f"""LAMMPS (15 Apr 2024)
 Running on 1 processor of 1 node
 Reading data file: structure.data
@@ -177,18 +200,18 @@ Neighbor list info ...
   Current step  : 0
   Time step     : 0.001
 Per MPI rank memory allocation (min/avg/max) = 2.0 | 2.0 | 2.0 Mbytes
-Step Temp PotEng KinEng TotEng Press 
-       0          300   -31.2075    0.0375  -31.17    1234.56
-     100          300   -31.2075    0.0375  -31.17    1234.56
-     200          300   -31.2075    0.0375  -31.17    1234.56
-     300          300   -31.2075    0.0375  -31.17    1234.56
-     400          300   -31.2075    0.0375  -31.17    1234.56
-     500          300   -31.2075    0.0375  -31.17    1234.56
-     600          300   -31.2075    0.0375  -31.17    1234.56
-     700          300   -31.2075    0.0375  -31.17    1234.56
-     800          300   -31.2075    0.0375  -31.17    1234.56
-     900          300   -31.2075    0.0375  -31.17    1234.56
-    1000          300   -31.2075    0.0375  -31.17    1234.56
+Step Temp PotEng KinEng TotEng Press Volume
+       0          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     100          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     200          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     300          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     400          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     500          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     600          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     700          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     800          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+     900          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
+    1000          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
 Loop time of 0.001234 on 1 procs for 1000 steps with 8 atoms
 Performance: 810.526 ns/day, 0.030 hours/ns, 810.526 timesteps/s
 100.0% CPU use with 1 MPI tasks x 1 OpenMP threads
@@ -218,3 +241,49 @@ Total wall time: 0:00:00
 """
     
     output_file.write_text(mock_output)
+
+
+def create_structure_from_properties(material: str, props) -> Atoms:
+    """Create atomic structure from material properties.
+    
+    Args:
+        material: Material formula
+        props: MaterialProperties object
+        
+    Returns:
+        ASE Atoms object
+    """
+    if props.lattice_type == "diamond":
+        return bulk(material, "diamond", a=props.lattice_parameter)
+    elif props.lattice_type == "fcc":
+        return bulk(material, "fcc", a=props.lattice_parameter)
+    elif props.lattice_type == "bcc":
+        return bulk(material, "bcc", a=props.lattice_parameter)
+    elif props.lattice_type == "hcp":
+        return bulk(material, "hcp", a=props.lattice_parameter)
+    elif props.lattice_type == "zincblende":
+        # For compound semiconductors like GaAs
+        return bulk(material, "zincblende", a=props.lattice_parameter)
+    elif props.lattice_type == "molecular":
+        # For molecular materials like H2O
+        return molecule(material)
+    else:
+        # Default: simple cubic
+        return bulk(material, "sc", a=props.lattice_parameter)
+
+
+def create_simple_structure(material: str) -> Atoms:
+    """Create a simple atomic structure as fallback.
+    
+    Args:
+        material: Material formula
+        
+    Returns:
+        ASE Atoms object
+    """
+    # Fallback structure generation for unknown materials
+    if material.upper() == "H2O":
+        return molecule("H2O")
+    else:
+        # Default: simple cubic with reasonable lattice parameter
+        return bulk(material, "sc", a=3.0)

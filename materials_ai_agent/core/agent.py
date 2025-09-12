@@ -198,36 +198,50 @@ IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation
         Returns:
             Tuple of (material, temperature, force_field)
         """
-        instruction_lower = instruction.lower()
+        from .materials_database import MaterialsDatabase
         
-        # Extract material
-        material = "Si"  # Default
-        if "silicon" in instruction_lower or "si" in instruction_lower:
-            material = "Si"
-        elif "aluminum" in instruction_lower or "al" in instruction_lower:
-            material = "Al"
-        elif "copper" in instruction_lower or "cu" in instruction_lower:
-            material = "Cu"
-        elif "iron" in instruction_lower or "fe" in instruction_lower:
-            material = "Fe"
-        elif "water" in instruction_lower or "h2o" in instruction_lower:
-            material = "H2O"
+        instruction_lower = instruction.lower()
+        materials_db = MaterialsDatabase()
+        
+        # Extract material using database
+        material = None
+        for formula, props in materials_db.get_all_materials().items():
+            if (formula.lower() in instruction_lower or 
+                props.description.lower() in instruction_lower or
+                any(alias in instruction_lower for alias in [formula.lower(), props.formula.lower()])):
+                material = formula
+                break
+        
+        # Fallback to simple keyword matching
+        if not material:
+            if "silicon" in instruction_lower or "si" in instruction_lower:
+                material = "Si"
+            elif "aluminum" in instruction_lower or "al" in instruction_lower:
+                material = "Al"
+            elif "copper" in instruction_lower or "cu" in instruction_lower:
+                material = "Cu"
+            elif "iron" in instruction_lower or "fe" in instruction_lower:
+                material = "Fe"
+            elif "water" in instruction_lower or "h2o" in instruction_lower:
+                material = "H2O"
+            else:
+                material = "Si"  # Default fallback
         
         # Extract temperature
-        temperature = 300.0  # Default
+        temperature = self.config.default_temperature
         import re
         temp_match = re.search(r'(\d+)\s*k', instruction_lower)
         if temp_match:
             temperature = float(temp_match.group(1))
+            # Ensure temperature is within limits
+            temperature = max(self.config.min_temperature, min(temperature, self.config.max_temperature))
         
         # Extract force field
-        force_field = "tersoff"  # Default
-        if "tersoff" in instruction_lower:
-            force_field = "tersoff"
-        elif "lennard" in instruction_lower or "lj" in instruction_lower:
-            force_field = "lj"
-        elif "eam" in instruction_lower:
-            force_field = "eam"
+        force_field = self.config.default_force_field
+        for ff in self.config.available_force_fields:
+            if ff.lower() in instruction_lower:
+                force_field = ff
+                break
         
         return material, temperature, force_field
     

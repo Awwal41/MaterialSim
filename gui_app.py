@@ -410,16 +410,20 @@ def initialize_session_state():
     if 'simulation_params' not in st.session_state:
         st.session_state.simulation_params = {}
     if 'simulation_workflow' not in st.session_state:
+        # Get configuration
+        from materials_ai_agent.core.config import Config
+        config = Config.from_env()
+        
         st.session_state.simulation_workflow = {
             'step': 0,  # 0: material, 1: temperature, 2: ensemble, 3: thermostat, 4: timestep, 5: structure, 6: confirm, 7: running, 8: complete
             'material': '',
-            'temperature': 300.0,
-            'ensemble': 'NVT',
-            'thermostat': 'Nose-Hoover',
-            'timestep': 0.001,
-            'n_steps': 10000,
-            'force_field': 'tersoff',
-            'structure_source': 'generate',  # 'generate', 'upload', 'material_project'
+            'temperature': config.default_temperature,
+            'ensemble': config.default_ensemble,
+            'thermostat': config.default_thermostat,
+            'timestep': config.default_timestep,
+            'n_steps': config.default_n_steps,
+            'force_field': config.default_force_field,
+            'structure_source': config.default_structure_source,
             'structure_file': None,
             'explanations_shown': set(),
             'user_confirmations': {}
@@ -513,25 +517,44 @@ def is_simulation_request(prompt: str) -> bool:
 def parse_initial_simulation_params(prompt: str) -> dict:
     """Parse initial simulation parameters from natural language."""
     import re
+    from materials_ai_agent.core.config import Config
+    from materials_ai_agent.core.materials_database import MaterialsDatabase
+    
+    config = Config.from_env()
+    materials_db = MaterialsDatabase()
     
     # Extract material
     material = ""  # Will be set by user
-    if "h2o" in prompt.lower() or "water" in prompt.lower():
-        material = "H2O"
-    elif "silicon" in prompt.lower() or "si" in prompt.lower():
-        material = "Si"
-    elif "aluminum" in prompt.lower() or "al" in prompt.lower():
-        material = "Al"
-    elif "copper" in prompt.lower() or "cu" in prompt.lower():
-        material = "Cu"
-    elif "iron" in prompt.lower() or "fe" in prompt.lower():
-        material = "Fe"
+    prompt_lower = prompt.lower()
+    
+    # Search through materials database
+    for formula, props in materials_db.get_all_materials().items():
+        if (formula.lower() in prompt_lower or 
+            props.description.lower() in prompt_lower or
+            any(alias in prompt_lower for alias in [formula.lower(), props.formula.lower()])):
+            material = formula
+            break
+    
+    # Fallback to simple keyword matching
+    if not material:
+        if "h2o" in prompt_lower or "water" in prompt_lower:
+            material = "H2O"
+        elif "silicon" in prompt_lower or "si" in prompt_lower:
+            material = "Si"
+        elif "aluminum" in prompt_lower or "al" in prompt_lower:
+            material = "Al"
+        elif "copper" in prompt_lower or "cu" in prompt_lower:
+            material = "Cu"
+        elif "iron" in prompt_lower or "fe" in prompt_lower:
+            material = "Fe"
     
     # Extract temperature
-    temperature = 300.0  # Default
-    temp_match = re.search(r'(\d+)\s*k', prompt.lower())
+    temperature = config.default_temperature
+    temp_match = re.search(r'(\d+)\s*k', prompt_lower)
     if temp_match:
         temperature = float(temp_match.group(1))
+        # Ensure temperature is within limits
+        temperature = max(config.min_temperature, min(temperature, config.max_temperature))
     
     return {
         "material": material,
@@ -1033,12 +1056,16 @@ def show_temperature_selection():
     st.markdown("### 🌡️ Step 2: Set Temperature")
     st.markdown("What temperature would you like to simulate at?")
     
+    # Get configuration for limits
+    from materials_ai_agent.core.config import Config
+    config = Config.from_env()
+    
     # Temperature input
     temperature = st.number_input(
         "Temperature (K)",
         value=st.session_state.simulation_workflow["temperature"],
-        min_value=1.0,
-        max_value=5000.0,
+        min_value=config.min_temperature,
+        max_value=config.max_temperature,
         step=10.0,
         help="Temperature in Kelvin"
     )
@@ -1091,10 +1118,14 @@ def show_ensemble_selection():
     st.markdown("Which thermodynamic ensemble would you like to use?")
     
     # Ensemble selection
+    # Get configuration for available ensembles
+    from materials_ai_agent.core.config import Config
+    config = Config.from_env()
+    
     ensemble = st.selectbox(
         "Thermodynamic Ensemble",
-        ["NVT", "NPT", "NVE"],
-        index=["NVT", "NPT", "NVE"].index(st.session_state.simulation_workflow["ensemble"]),
+        config.available_ensembles,
+        index=config.available_ensembles.index(st.session_state.simulation_workflow["ensemble"]) if st.session_state.simulation_workflow["ensemble"] in config.available_ensembles else 0,
         help="Choose the thermodynamic ensemble for your simulation"
     )
     
@@ -1179,11 +1210,15 @@ def show_timestep_selection():
     col1, col2 = st.columns(2)
     
     with col1:
+        # Get configuration for limits
+        from materials_ai_agent.core.config import Config
+        config = Config.from_env()
+        
         timestep = st.number_input(
             "Timestep (ps)",
             value=st.session_state.simulation_workflow["timestep"],
-            min_value=0.0001,
-            max_value=0.01,
+            min_value=config.min_timestep,
+            max_value=config.max_timestep,
             step=0.0001,
             format="%.4f",
             help="Timestep in picoseconds"
@@ -1193,8 +1228,8 @@ def show_timestep_selection():
         n_steps = st.number_input(
             "Number of Steps",
             value=st.session_state.simulation_workflow["n_steps"],
-            min_value=1000,
-            max_value=1000000,
+            min_value=config.min_n_steps,
+            max_value=config.max_n_steps,
             step=1000,
             help="Total number of simulation steps"
         )
@@ -1321,10 +1356,14 @@ def show_simulation_confirmation():
     
     # Force field selection
     st.markdown("**Force Field:**")
+    # Get configuration for available force fields
+    from materials_ai_agent.core.config import Config
+    config = Config.from_env()
+    
     force_field = st.selectbox(
         "Select Force Field",
-        ["tersoff", "eam", "lj", "reaxff"],
-        index=["tersoff", "eam", "lj", "reaxff"].index(workflow["force_field"]),
+        config.available_force_fields,
+        index=config.available_force_fields.index(workflow["force_field"]) if workflow["force_field"] in config.available_force_fields else 0,
         help="Choose the appropriate force field for your material"
     )
     
@@ -1962,7 +2001,18 @@ def perform_rdf_analysis():
         # Check if files exist
         import os
         if not os.path.exists(sim_dir):
-            return "❌ Simulation directory not found. Please run a simulation first."
+            # Try to find the actual directory
+            import glob
+            possible_dirs = glob.glob(f"simulations/{material}_*K_*steps")
+            if possible_dirs:
+                sim_dir = possible_dirs[0]
+            else:
+                # Try to find any simulation directory
+                all_dirs = glob.glob("simulations/*")
+                if all_dirs:
+                    sim_dir = all_dirs[0]  # Use the most recent one
+                else:
+                    return f"❌ No simulation directories found. Looking for: {sim_dir}"
         
         # Read the structure file and compute RDF directly
         structure_file = os.path.join(sim_dir, "structure.xyz")
@@ -2135,7 +2185,18 @@ def perform_thermodynamic_analysis():
         # Check if files exist
         import os
         if not os.path.exists(sim_dir):
-            return "❌ Simulation directory not found. Please run a simulation first."
+            # Try to find the actual directory
+            import glob
+            possible_dirs = glob.glob(f"simulations/{material}_*K_*steps")
+            if possible_dirs:
+                sim_dir = possible_dirs[0]
+            else:
+                # Try to find any simulation directory
+                all_dirs = glob.glob("simulations/*")
+                if all_dirs:
+                    sim_dir = all_dirs[0]  # Use the most recent one
+                else:
+                    return f"❌ No simulation directories found. Looking for: {sim_dir}"
         
         # Read the log file and compute thermodynamic properties directly
         log_file = os.path.join(sim_dir, "output.log")
