@@ -12,11 +12,12 @@ from ..core.exceptions import MaterialsAgentError
 class BaseMaterialsTool(BaseTool, ABC):
     """Base class for all Materials AI Agent tools."""
     
-    config: Config
+    config: Config = Field(..., description="Configuration object")
     
-    class Config:
-        ignored_types = (property,)
-        arbitrary_types_allowed = True
+    model_config = {
+        "ignored_types": (property,),
+        "arbitrary_types_allowed": True
+    }
     
     def __init__(self, config: Config, **kwargs):
         """Initialize the tool with configuration.

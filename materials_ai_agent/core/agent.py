@@ -19,6 +19,7 @@ from ..tools import (
     MLTool,
     VisualizationTool,
 )
+from ..tools.simulation import create_simulation_tools
 
 
 class MaterialsAgent:
@@ -37,9 +38,8 @@ class MaterialsAgent:
         logging.basicConfig(level=getattr(logging, self.config.log_level))
         self.logger = logging.getLogger(__name__)
         
-        # Initialize tools (disabled for now due to Pydantic v2 issues)
-        # self.tools = self._initialize_tools()
-        self.tools = []
+        # Initialize tools
+        self.tools = self._initialize_tools()
         
         # Initialize LLM
         self.llm = ChatOpenAI(
@@ -63,14 +63,9 @@ class MaterialsAgent:
     
     def _initialize_tools(self) -> List:
         """Initialize all available tools."""
-        tools = [
-            SimulationTool(config=self.config),
-            AnalysisTool(config=self.config),
-            DatabaseTool(config=self.config),
-            MLTool(config=self.config),
-            VisualizationTool(config=self.config),
-        ]
-        return tools
+        # For now, return empty list to avoid Pydantic issues
+        # We'll handle simulation directly in the agent
+        return []
     
     def _create_agent(self) -> AgentExecutor:
         """Create the agent with tools and memory."""
@@ -91,12 +86,7 @@ You should:
 - Recommend follow-up simulations or experiments when appropriate
 - Use proper scientific terminology and units
 
-When asked to run simulations, always:
-1. Verify the material structure and parameters
-2. Set up appropriate force fields and simulation conditions
-3. Monitor simulation progress
-4. Analyze results and compute relevant properties
-5. Provide interpretation and recommendations
+When asked to run simulations, you MUST use the available tools to actually execute the simulation, not just provide instructions.
 
 Available tools:
 - simulation: For setting up and running MD simulations
@@ -104,42 +94,66 @@ Available tools:
 - database: For querying materials databases
 - ml: For ML-based property prediction
 - visualization: For creating plots and reports
+
+IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation tool to actually execute it, not just provide instructions or code.
 """
         
         prompt = ChatPromptTemplate.from_messages([
             ("system", system_prompt),
             MessagesPlaceholder(variable_name="chat_history"),
             ("human", "{input}"),
+            MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
         
-        # Create a simple chain without tools for now
-        from langchain.chains import LLMChain
-        chain = LLMChain(llm=self.llm, prompt=prompt)
-        
-        # Create a simple agent executor that just uses the LLM
-        class SimpleAgentExecutor:
-            def __init__(self, chain, memory):
-                self.chain = chain
-                self.memory = memory
+        # Create agent with tools
+        try:
+            agent = create_openai_tools_agent(
+                llm=self.llm,
+                tools=self.tools,
+                prompt=prompt
+            )
             
-            def invoke(self, inputs):
-                # Get chat history
-                chat_history = self.memory.chat_memory.messages
+            agent_executor = AgentExecutor(
+                agent=agent,
+                tools=self.tools,
+                memory=self.memory,
+                verbose=True,
+                handle_parsing_errors=True
+            )
+            
+            return agent_executor
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to create agent with tools: {e}. Falling back to simple LLM.")
+            
+            # Fallback to simple LLM chain
+            from langchain.chains import LLMChain
+            chain = LLMChain(llm=self.llm, prompt=prompt)
+            
+            # Create a simple agent executor that just uses the LLM
+            class SimpleAgentExecutor:
+                def __init__(self, chain, memory):
+                    self.chain = chain
+                    self.memory = memory
                 
-                # Format the input
-                formatted_input = {
-                    "input": inputs["input"],
-                    "chat_history": chat_history
-                }
-                
-                # Get response
-                response = self.chain.invoke(formatted_input)
-                
-                return {"output": response["text"]}
-        
-        agent_executor = SimpleAgentExecutor(chain, self.memory)
-        
-        return agent_executor
+                def invoke(self, inputs):
+                    # Get chat history
+                    chat_history = self.memory.chat_memory.messages
+                    
+                    # Format the input
+                    formatted_input = {
+                        "input": inputs["input"],
+                        "chat_history": chat_history
+                    }
+                    
+                    # Get response
+                    response = self.chain.invoke(formatted_input)
+                    
+                    return {"output": response["text"]}
+            
+            agent_executor = SimpleAgentExecutor(chain, self.memory)
+            
+            return agent_executor
     
     def run_simulation(self, instruction: str) -> str:
         """Run a simulation based on natural language instruction.
@@ -153,16 +167,69 @@ Available tools:
         try:
             self.logger.info(f"Running simulation: {instruction}")
             
-            # Use the agent to process the instruction
-            result = self.agent.invoke({
-                "input": f"Please run the following simulation: {instruction}"
-            })
+            # Parse the instruction to extract simulation parameters
+            material, temperature, force_field = self._parse_simulation_instruction(instruction)
             
-            return result["output"]
+            # Use simple simulation function
+            from ..simple_simulation import run_simple_simulation
+            
+            # Run the simulation
+            result = run_simple_simulation(
+                material=material,
+                temperature=temperature,
+                force_field=force_field
+            )
+            
+            if result["success"]:
+                return f"✅ {result['message']}\n\nSimulation completed successfully!\nDirectory: {result['simulation_directory']}\nOutput files: {result['output_files']}"
+            else:
+                return f"❌ Simulation failed: {result['error']}"
             
         except Exception as e:
             self.logger.error(f"Simulation failed: {str(e)}")
             return f"Error: {str(e)}"
+    
+    def _parse_simulation_instruction(self, instruction: str) -> tuple:
+        """Parse simulation instruction to extract parameters.
+        
+        Args:
+            instruction: Natural language instruction
+            
+        Returns:
+            Tuple of (material, temperature, force_field)
+        """
+        instruction_lower = instruction.lower()
+        
+        # Extract material
+        material = "Si"  # Default
+        if "silicon" in instruction_lower or "si" in instruction_lower:
+            material = "Si"
+        elif "aluminum" in instruction_lower or "al" in instruction_lower:
+            material = "Al"
+        elif "copper" in instruction_lower or "cu" in instruction_lower:
+            material = "Cu"
+        elif "iron" in instruction_lower or "fe" in instruction_lower:
+            material = "Fe"
+        elif "water" in instruction_lower or "h2o" in instruction_lower:
+            material = "H2O"
+        
+        # Extract temperature
+        temperature = 300.0  # Default
+        import re
+        temp_match = re.search(r'(\d+)\s*k', instruction_lower)
+        if temp_match:
+            temperature = float(temp_match.group(1))
+        
+        # Extract force field
+        force_field = "tersoff"  # Default
+        if "tersoff" in instruction_lower:
+            force_field = "tersoff"
+        elif "lennard" in instruction_lower or "lj" in instruction_lower:
+            force_field = "lj"
+        elif "eam" in instruction_lower:
+            force_field = "eam"
+        
+        return material, temperature, force_field
     
     def analyze_results(self, simulation_path: str) -> Dict[str, Any]:
         """Analyze simulation results.

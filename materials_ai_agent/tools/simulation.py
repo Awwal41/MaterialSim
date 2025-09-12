@@ -33,8 +33,8 @@ class SimulationParameters(BaseModel):
 class SimulationTool(BaseMaterialsTool):
     """Tool for setting up and running molecular dynamics simulations."""
     
-    name: str = "simulation"
-    description: str = "Set up and run molecular dynamics simulations using LAMMPS"
+    name: str = Field(default="simulation", description="Tool name")
+    description: str = Field(default="Set up and run molecular dynamics simulations using LAMMPS", description="Tool description")
     
     def __init__(self, config):
         super().__init__(config)
@@ -149,6 +149,63 @@ class SimulationTool(BaseMaterialsTool):
                 "error": self._handle_error(e, "run_simulation")
             }
     
+    def run_md_simulation(
+        self,
+        material: str,
+        temperature: float = 300.0,
+        n_steps: int = 10000,
+        force_field: str = "tersoff"
+    ) -> Dict[str, Any]:
+        """Run a complete molecular dynamics simulation from start to finish.
+        
+        Args:
+            material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
+            temperature: Temperature in K
+            n_steps: Number of simulation steps
+            force_field: Force field to use (tersoff, lj, eam, etc.)
+            
+        Returns:
+            Dictionary containing simulation results
+        """
+        try:
+            # First set up the simulation
+            setup_result = self.setup_simulation(
+                material=material,
+                temperature=temperature,
+                n_steps=n_steps,
+                force_field=force_field
+            )
+            
+            if not setup_result["success"]:
+                return setup_result
+            
+            # Then run the simulation
+            run_result = self.run_simulation(
+                simulation_directory=setup_result["simulation_directory"]
+            )
+            
+            if not run_result["success"]:
+                return run_result
+            
+            return {
+                "success": True,
+                "material": material,
+                "temperature": temperature,
+                "n_steps": n_steps,
+                "force_field": force_field,
+                "simulation_directory": setup_result["simulation_directory"],
+                "output_files": run_result["output_files"],
+                "simulation_time": run_result["simulation_time"],
+                "status": "completed",
+                "message": f"Successfully completed {n_steps} step MD simulation of {material} at {temperature}K using {force_field} potential"
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "error": self._handle_error(e, "run_md_simulation")
+            }
+
     def monitor_simulation(
         self,
         simulation_directory: str
@@ -274,3 +331,83 @@ class SimulationTool(BaseMaterialsTool):
             "success": True,
             "force_fields": force_fields
         }
+
+
+# Create tool instances for LangChain
+def create_simulation_tools(config):
+    """Create simulation tools for LangChain agent."""
+    sim_tool = SimulationTool(config)
+    
+    @tool
+    def run_md_simulation(
+        material: str,
+        temperature: float = 300.0,
+        n_steps: int = 10000,
+        force_field: str = "tersoff"
+    ) -> str:
+        """Run a complete molecular dynamics simulation from start to finish.
+        
+        Args:
+            material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
+            temperature: Temperature in K
+            n_steps: Number of simulation steps
+            force_field: Force field to use (tersoff, lj, eam, etc.)
+            
+        Returns:
+            String description of simulation results
+        """
+        result = sim_tool.run_md_simulation(
+            material=material,
+            temperature=temperature,
+            n_steps=n_steps,
+            force_field=force_field
+        )
+        
+        if result["success"]:
+            return f"✅ {result['message']}\nSimulation directory: {result['simulation_directory']}\nOutput files: {result['output_files']}"
+        else:
+            return f"❌ Simulation failed: {result['error']}"
+    
+    @tool
+    def setup_simulation(
+        material: str,
+        temperature: float = 300.0,
+        pressure: float = 1.0,
+        timestep: float = 0.001,
+        n_steps: int = 10000,
+        ensemble: str = "NVT",
+        force_field: str = "tersoff",
+        output_frequency: int = 100
+    ) -> str:
+        """Set up a molecular dynamics simulation.
+        
+        Args:
+            material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
+            temperature: Temperature in K
+            pressure: Pressure in atm
+            timestep: Timestep in ps
+            n_steps: Number of simulation steps
+            ensemble: Thermodynamic ensemble (NVT, NPT, NVE)
+            force_field: Force field to use (tersoff, lj, eam, etc.)
+            output_frequency: How often to output data
+            
+        Returns:
+            String description of simulation setup
+        """
+        result = sim_tool.setup_simulation(
+            material=material,
+            temperature=temperature,
+            pressure=pressure,
+            timestep=timestep,
+            n_steps=n_steps,
+            ensemble=ensemble,
+            force_field=force_field,
+            output_frequency=output_frequency
+        )
+        
+        if result["success"]:
+            return f"✅ Simulation setup complete!\nMaterial: {result['material']}\nTemperature: {result['temperature']}K\nSteps: {result['n_steps']}\nDirectory: {result['simulation_directory']}"
+        else:
+            return f"❌ Setup failed: {result['error']}"
+    
+    return [run_md_simulation, setup_simulation]

@@ -210,9 +210,6 @@ Common issues and solutions:
 
 See [INSTALL.md](docs/INSTALL.md) for detailed troubleshooting.
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
 
 ## 📞 Support
 
