@@ -864,8 +864,19 @@ This may take a few minutes. I'll let you know when it's complete!"""
     
     elif step == 9:  # Post-simulation analysis
         if any(word in prompt_lower for word in ["analyze", "analysis", "rdf", "msd", "plot", "graph", "result", "results"]):
-            # Handle analysis requests
-            response = f"""Great! I can help you analyze the simulation results. The simulation has completed and I have the following output files:
+            # Check if user specified a specific analysis
+            if "rdf" in prompt_lower or "radial distribution" in prompt_lower:
+                # Perform RDF analysis
+                response = perform_rdf_analysis()
+            elif "msd" in prompt_lower or "mean squared displacement" in prompt_lower:
+                # Perform MSD analysis
+                response = perform_msd_analysis()
+            elif "temperature" in prompt_lower or "energy" in prompt_lower:
+                # Perform temperature/energy analysis
+                response = perform_thermodynamic_analysis()
+            else:
+                # Show analysis options
+                response = f"""Great! I can help you analyze the simulation results. The simulation has completed and I have the following output files:
 
 📁 **Available Files:**
 - `in.lammps` - LAMMPS input file
@@ -1936,6 +1947,341 @@ def main():
     else:
         # Main chat interface
         display_chat_interface()
+
+def perform_rdf_analysis():
+    """Perform RDF analysis on simulation results."""
+    try:
+        # Get simulation directory
+        workflow = st.session_state.simulation_workflow
+        material = workflow["material"]
+        temperature = workflow["temperature"]
+        n_steps = workflow["n_steps"]
+        
+        sim_dir = f"simulations/{material}_{temperature}K_{n_steps}steps"
+        
+        # Check if files exist
+        import os
+        if not os.path.exists(sim_dir):
+            return "❌ Simulation directory not found. Please run a simulation first."
+        
+        # Read the structure file and compute RDF directly
+        structure_file = os.path.join(sim_dir, "structure.xyz")
+        if not os.path.exists(structure_file):
+            return "❌ Structure file not found. Cannot compute RDF."
+        
+        # Simple RDF analysis using the structure file
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            
+            # Read XYZ file
+            with open(structure_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Get number of atoms
+            n_atoms = int(lines[0].strip())
+            
+            # Read atomic positions
+            positions = []
+            for i in range(2, 2 + n_atoms):  # Skip first two lines (atom count and comment)
+                coords = lines[i].strip().split()
+                if len(coords) >= 4:  # x, y, z coordinates
+                    positions.append([float(coords[1]), float(coords[2]), float(coords[3])])
+            
+            positions = np.array(positions)
+            
+            # Calculate RDF
+            r_max = 10.0
+            n_bins = 200
+            r_bins = np.linspace(0, r_max, n_bins + 1)
+            r_centers = (r_bins[:-1] + r_bins[1:]) / 2
+            dr = r_bins[1] - r_bins[0]
+            
+            # Calculate pairwise distances
+            distances = []
+            for i in range(len(positions)):
+                for j in range(i + 1, len(positions)):
+                    dist = np.linalg.norm(positions[i] - positions[j])
+                    if dist < r_max:
+                        distances.append(dist)
+            
+            distances = np.array(distances)
+            
+            # Create histogram
+            hist, _ = np.histogram(distances, bins=r_bins)
+            
+            # Calculate RDF
+            rho = len(positions) / (4/3 * np.pi * r_max**3)  # Approximate density
+            g_r = hist / (4 * np.pi * r_centers**2 * dr * rho * len(positions))
+            
+            # Find peaks
+            from scipy.signal import find_peaks
+            peaks, _ = find_peaks(g_r, height=0.1)
+            peak_distances = r_centers[peaks]
+            peak_heights = g_r[peaks]
+            
+            # Create plot
+            plt.figure(figsize=(10, 6))
+            plt.plot(r_centers, g_r, 'b-', linewidth=2, label='RDF')
+            plt.scatter(peak_distances, peak_heights, color='red', s=50, zorder=5, label='Peaks')
+            plt.xlabel('Distance (Å)')
+            plt.ylabel('g(r)')
+            plt.title(f'Radial Distribution Function - {material} at {temperature}K')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            # Save plot
+            plot_file = os.path.join(sim_dir, 'rdf_plot.png')
+            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Create summary
+            summary = f"""**RDF Analysis Complete!**
+
+📊 **Key Results:**
+- **First peak**: {peak_distances[0]:.2f} Å (nearest neighbor distance)
+- **Peak count**: {len(peaks)} significant peaks found
+- **Max RDF value**: {np.max(g_r):.2f}
+- **Plot saved**: {plot_file}
+
+🔬 **Interpretation:**
+- The first peak at {peak_distances[0]:.2f} Å shows the nearest neighbor distance
+- Peak heights indicate coordination strength
+- Peak positions reveal the atomic structure pattern
+
+📁 **Files created:**
+- RDF plot: `{plot_file}`
+- Raw data available in simulation directory
+
+The RDF shows the probability of finding atoms at different distances from each other. Peaks indicate preferred interatomic distances, which reveal the atomic structure and coordination."""
+            
+            return summary
+            
+        except Exception as analysis_error:
+            return f"""🔬 **RDF Analysis**
+
+I attempted to compute the RDF but encountered an error: {str(analysis_error)}
+
+However, I can still help you understand what RDF analysis would show:
+
+**What RDF reveals:**
+- **Atomic coordination**: How many neighbors each atom has
+- **Bond distances**: Preferred interatomic distances  
+- **Structure type**: Crystalline vs amorphous characteristics
+
+**For your {material} simulation:**
+- First peak typically around 2.3-2.5 Å (Si-Si bonds)
+- Peaks at ~3.8 Å, ~4.5 Å show second and third coordination shells
+- Peak heights indicate coordination strength
+
+Would you like me to try a different analysis approach or help you interpret the simulation results in another way?"""
+            
+    except Exception as e:
+        return f"❌ Error performing RDF analysis: {str(e)}"
+
+def perform_msd_analysis():
+    """Perform MSD analysis on simulation results."""
+    try:
+        workflow = st.session_state.simulation_workflow
+        material = workflow["material"]
+        temperature = workflow["temperature"]
+        n_steps = workflow["n_steps"]
+        
+        sim_dir = f"simulations/{material}_{temperature}K_{n_steps}steps"
+        
+        if st.session_state.agent:
+            analysis_prompt = f"Analyze the MSD (Mean Squared Displacement) for the simulation in {sim_dir}. Use the structure.xyz file to compute the MSD and show the results."
+            
+            with st.spinner("🔬 Computing MSD analysis..."):
+                response = st.session_state.agent.chat(analysis_prompt)
+            
+            return f"""🔬 **MSD Analysis Results**
+
+{response}
+
+The MSD shows how atoms move over time, indicating diffusion behavior and material properties.
+
+Would you like to:
+- **Download the MSD data**: Get the raw MSD values as a file
+- **Analyze RDF**: Look at atomic structure
+- **Plot temperature**: See thermodynamic properties
+- **New analysis**: Try a different analysis type"""
+        else:
+            return """🔬 **MSD Analysis**
+
+I can help you analyze the Mean Squared Displacement (MSD) of your simulation. The MSD shows:
+
+- **Diffusion behavior**: How atoms move over time
+- **Material properties**: Solid vs liquid characteristics
+- **Temperature effects**: How temperature affects atomic motion
+
+To perform the MSD analysis, I need to process the atomic trajectory data.
+
+Would you like me to proceed with the MSD calculation?"""
+            
+    except Exception as e:
+        return f"❌ Error performing MSD analysis: {str(e)}"
+
+def perform_thermodynamic_analysis():
+    """Perform thermodynamic analysis on simulation results."""
+    try:
+        workflow = st.session_state.simulation_workflow
+        material = workflow["material"]
+        temperature = workflow["temperature"]
+        n_steps = workflow["n_steps"]
+        
+        sim_dir = f"simulations/{material}_{temperature}K_{n_steps}steps"
+        
+        # Check if files exist
+        import os
+        if not os.path.exists(sim_dir):
+            return "❌ Simulation directory not found. Please run a simulation first."
+        
+        # Read the log file and compute thermodynamic properties directly
+        log_file = os.path.join(sim_dir, "output.log")
+        if not os.path.exists(log_file):
+            return "❌ Log file not found. Cannot compute thermodynamic analysis."
+        
+        try:
+            import numpy as np
+            import matplotlib.pyplot as plt
+            import pandas as pd
+            
+            # Read LAMMPS log file
+            with open(log_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Find the data section (after "Step Temp Press Volume")
+            data_start = None
+            for i, line in enumerate(lines):
+                if "Step Temp Press Volume" in line:
+                    data_start = i + 1
+                    break
+            
+            if data_start is None:
+                return "❌ Could not find thermodynamic data in log file."
+            
+            # Parse data
+            data = []
+            for i in range(data_start, len(lines)):
+                line = lines[i].strip()
+                if line and not line.startswith('#'):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            step = int(parts[0])
+                            temp = float(parts[1])
+                            press = float(parts[2])
+                            volume = float(parts[3])
+                            data.append([step, temp, press, volume])
+                        except (ValueError, IndexError):
+                            continue
+            
+            if not data:
+                return "❌ No valid thermodynamic data found in log file."
+            
+            # Convert to numpy array
+            data = np.array(data)
+            steps = data[:, 0]
+            temps = data[:, 1]
+            pressures = data[:, 2]
+            volumes = data[:, 3]
+            
+            # Calculate statistics
+            avg_temp = np.mean(temps)
+            std_temp = np.std(temps)
+            avg_press = np.mean(pressures)
+            std_press = np.std(pressures)
+            
+            # Create plots
+            fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+            
+            # Temperature plot
+            ax1.plot(steps, temps, 'b-', linewidth=2)
+            ax1.axhline(y=avg_temp, color='r', linestyle='--', alpha=0.7, label=f'Average: {avg_temp:.1f}K')
+            ax1.set_xlabel('Step')
+            ax1.set_ylabel('Temperature (K)')
+            ax1.set_title(f'Temperature Evolution - {material}')
+            ax1.grid(True, alpha=0.3)
+            ax1.legend()
+            
+            # Pressure plot
+            ax2.plot(steps, pressures, 'g-', linewidth=2)
+            ax2.axhline(y=avg_press, color='r', linestyle='--', alpha=0.7, label=f'Average: {avg_press:.1f} bar')
+            ax2.set_xlabel('Step')
+            ax2.set_ylabel('Pressure (bar)')
+            ax2.set_title(f'Pressure Evolution - {material}')
+            ax2.grid(True, alpha=0.3)
+            ax2.legend()
+            
+            # Volume plot
+            ax3.plot(steps, volumes, 'm-', linewidth=2)
+            ax3.set_xlabel('Step')
+            ax3.set_ylabel('Volume (Å³)')
+            ax3.set_title(f'Volume Evolution - {material}')
+            ax3.grid(True, alpha=0.3)
+            
+            # Temperature distribution
+            ax4.hist(temps, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
+            ax4.axvline(x=avg_temp, color='r', linestyle='--', linewidth=2, label=f'Mean: {avg_temp:.1f}K')
+            ax4.set_xlabel('Temperature (K)')
+            ax4.set_ylabel('Frequency')
+            ax4.set_title(f'Temperature Distribution - {material}')
+            ax4.legend()
+            ax4.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            
+            # Save plot
+            plot_file = os.path.join(sim_dir, 'thermodynamic_analysis.png')
+            plt.savefig(plot_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            # Create summary
+            summary = f"""**Thermodynamic Analysis Complete!**
+
+📊 **Key Results:**
+- **Average Temperature**: {avg_temp:.1f} ± {std_temp:.1f} K
+- **Average Pressure**: {avg_press:.1f} ± {std_press:.1f} bar
+- **Temperature Range**: {np.min(temps):.1f} - {np.max(temps):.1f} K
+- **Pressure Range**: {np.min(pressures):.1f} - {np.max(pressures):.1f} bar
+- **Volume Range**: {np.min(volumes):.1f} - {np.max(volumes):.1f} Å³
+
+🔬 **System Status:**
+- **Temperature Stability**: {'✅ Stable' if std_temp < 50 else '⚠️ Fluctuating'}
+- **Pressure Stability**: {'✅ Stable' if std_press < 100 else '⚠️ Fluctuating'}
+- **Equilibration**: {'✅ Likely equilibrated' if std_temp < 30 else '⚠️ May need more time'}
+
+📁 **Files created:**
+- Thermodynamic plots: `{plot_file}`
+- Raw data available in simulation directory
+
+These plots show how temperature, energy, and pressure evolve during the simulation, indicating system stability and equilibration."""
+            
+            return summary
+            
+        except Exception as analysis_error:
+            return f"""🔬 **Thermodynamic Analysis**
+
+I attempted to compute the thermodynamic analysis but encountered an error: {str(analysis_error)}
+
+However, I can still help you understand what thermodynamic analysis would show:
+
+**What thermodynamic analysis reveals:**
+- **Temperature evolution**: How temperature changes over time
+- **Energy plots**: Potential and kinetic energy trends
+- **Pressure analysis**: System pressure during simulation
+- **Equilibration**: Whether the system reached equilibrium
+
+**For your {material} simulation at {temperature}K:**
+- Temperature should fluctuate around {temperature}K
+- Pressure should be relatively stable
+- Volume should remain constant (NVT) or fluctuate (NPT)
+
+Would you like me to try a different analysis approach or help you interpret the simulation results in another way?"""
+            
+    except Exception as e:
+        return f"❌ Error performing thermodynamic analysis: {str(e)}"
 
 if __name__ == "__main__":
     main()

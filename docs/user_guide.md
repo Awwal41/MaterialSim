@@ -408,10 +408,4 @@ agent = MaterialsAgent(config)
 4. **Save Progress**: Regularly save intermediate results
 5. **Document Workflows**: Keep records of successful parameter combinations
 
-## Support
 
-For questions and support:
-
-- GitHub Issues: [materials-ai-agent/issues](https://github.com/materials-ai-agent/materials-ai-agent/issues)
-- Documentation: [materials-ai-agent.readthedocs.io](https://materials-ai-agent.readthedocs.io)
-- Email: support@materials-ai-agent.com

@@ -170,15 +170,6 @@ python -m pytest tests/ --cov=materials_ai_agent
 make examples
 ```
 
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
 
 ## 📊 Performance
 
@@ -209,12 +200,6 @@ Common issues and solutions:
 
 See [INSTALL.md](docs/INSTALL.md) for detailed troubleshooting.
 
-
-## 📞 Support
-
-- **GitHub Issues**: [Report bugs and request features](https://github.com/materials-ai-agent/materials-ai-agent/issues)
-- **Documentation**: [Complete guides and API reference](docs/)
-- **Community**: [GitHub Discussions](https://github.com/materials-ai-agent/materials-ai-agent/discussions)
 
 ## 🙏 Acknowledgments
 
