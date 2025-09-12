@@ -48,14 +48,14 @@ python quick_setup.py
 ```
 
 ### Detailed Installation
-See [INSTALL.md](INSTALL.md) for comprehensive installation instructions including LAMMPS setup and system requirements.
+See [INSTALL.md](docs/INSTALL.md) for comprehensive installation instructions including LAMMPS setup and system requirements.
 
 ## 🚀 Quick Start
 
 ### 🌐 Web GUI (Recommended for Beginners)
 ```bash
 # Launch the pure non-hardcoded interface (NEW!)
-python launch_pure_gui.py
+python launch_gui.py
 
 # Or launch the integrated GUI
 python launch_integrated_gui.py
@@ -103,11 +103,12 @@ python examples/advanced_workflow.py
 
 ## 📚 Documentation
 
+- **[Getting Started](docs/GETTING_STARTED.md)**: Quick start guide for new users
 - **[User Guide](docs/user_guide.md)**: Complete usage instructions
 - **[API Reference](docs/api_reference.md)**: Detailed API documentation
 - **[Examples](docs/examples.md)**: Comprehensive example workflows
-- **[Installation Guide](INSTALL.md)**: Step-by-step setup
-- **[Project Summary](PROJECT_SUMMARY.md)**: Complete project overview
+- **[Installation Guide](docs/INSTALL.md)**: Step-by-step setup
+- **[Project Summary](docs/PROJECT_SUMMARY.md)**: Complete project overview
 
 ## 🔬 Example Use Cases
 
@@ -207,7 +208,7 @@ Common issues and solutions:
 3. **Memory issues**: Reduce simulation size or use smaller batches
 4. **Import errors**: Ensure virtual environment is activated
 
-See [INSTALL.md](INSTALL.md) for detailed troubleshooting.
+See [INSTALL.md](docs/INSTALL.md) for detailed troubleshooting.
 
 ## 📄 License
 

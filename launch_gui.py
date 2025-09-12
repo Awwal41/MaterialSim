@@ -44,7 +44,7 @@ def launch_gui():
     print("Launching MaterialSim AI Agent Pure GUI...")
     try:
         subprocess.run([
-            sys.executable, "-m", "streamlit", "run", "gui_app_pure.py",
+            sys.executable, "-m", "streamlit", "run", "gui_app.py",
             "--server.port", "8501",
             "--server.address", "localhost",
             "--browser.gatherUsageStats", "false"
@@ -62,8 +62,8 @@ def main():
     print("=" * 60)
     
     # Check if we're in the right directory
-    if not Path("gui_app_pure.py").exists():
-        print("❌ Error: gui_app_pure.py not found!")
+    if not Path("gui_app.py").exists():
+        print("❌ Error: gui_app.py not found!")
         print("Please run this script from the MaterialSim AI Agent directory.")
         return
     
