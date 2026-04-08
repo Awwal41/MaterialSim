@@ -1,5 +1,5 @@
 ---
-title: 'MaterialSim: An AI-driven agent for automating computational materials simulations'
+title: 'MaterialSim: An AI-driven Agent for Automating Computational Materials Simulations'
 tags:
   - Python
   - materials science
@@ -14,39 +14,43 @@ authors:
     corresponding: true
     email: awwalola@umich.edu
     orcid: 0009-0006-3979-2078
-    affiliation: "2"
-  - name: Akhila Ponugoti
-    orcid: 0009-0007-8947-7794
     affiliation: "1"
   - name: Vallabh Vasudevan
     orcid: 0000-0001-7933-4924
+    affiliation: "1"
+  - name: Akhila Ponugoti
+    orcid: 0009-0007-8947-7794
     affiliation: "2"
-  - name: Jodie A. Yuwono
-    orcid: 0000-0002-0915-0756
-    affiliation: "3"
   - name: Toheeb Balogun
     orcid: 0009-0006-8505-3196
+    affiliation: "3"
+  - name: Jodie A. Yuwono
+    orcid: 0000-0002-0915-0756
     affiliation: "4"
+
 affiliations:
   - index: 1
-    name: Johns Hopkins University, Baltimore, MD, United States
-    ror: 00za53h95
-  - index: 2
     name: Department of Chemical Engineering, University of Michigan, Ann Arbor, MI, United States
     ror: 00jmfr291
-  - index: 3
-    name: School of Chemical Engineering and Materials Science, The University of Adelaide, Adelaide, South Australia, Australia
-    ror: 00892tw58
-  - index: 4
+  - index: 2
+    name: Johns Hopkins University, Baltimore, MD, United States
+    ror: 00za53h95
+- index: 3
     name: Department of Chemical Engineering, Louisiana State University, Baton Rouge, LA, United States
     ror: 05ect4e57
+  - index: 4
+    name: School of Chemical Engineering and Materials Science, The University of Adelaide, Adelaide, South Australia, Australia
+    ror: 00892tw58
+  
 date: 8 April 2026
 bibliography: paper.bib
 ---
 
 # Summary
 
-Discovering and understanding materials often relies on computer simulations that track how atoms move and interact over time. Setting up these simulations has traditionally required specialized expertise: choosing simulation software, interatomic models, numerical settings, and analysis steps, then wiring them together with scripts. **MaterialSim** helps researchers drive such workflows through natural language: an agent plans and calls tools for molecular dynamics, property analysis, and optional machine learning, producing quantitative outputs and plots.
+Discovering and understanding materials often relies on computer simulations that track how atoms move and interact over time. Setting up these simulations has traditionally required specialized expertise: choosing simulation software, interatomic models, numerical settings, and analysis steps, then wiring them together with scripts. These manual steps slow down discovery and limit the exploration of chemical space.
+
+**MaterialSim** helps researchers drive such workflows through natural language: an agent plans and calls tools for molecular dynamics, property analysis, and optional machine learning, producing quantitative outputs and plots. It automates the setup and execution of molecular dynamics (MD) simulations, with system input configurations either generated within MaterialSim or imported from the Materials Project database. The platform recommends suitable interatomic models tailored to the system and analyzes the outputs to extract key properties, such as radial distribution functions and mean-squared displacements. MaterialSim also provides automated visualization, result interpretation, and accelerated predictions through machine learning models. 
 
 The software is developed in public as the GitHub repository [Awwal41/MaterialSim](https://github.com/Awwal41/MaterialSim) [@materialsim]. The Python import path is `materials_ai_agent`, the main class is `MaterialsAgent`, and the console entry point is `materials-agent` (distribution metadata in `setup.py` uses the name `materialsim-ai-agent`). Implementations use LAMMPS [@plimpton1995fast] together with ASE [@larsen2017atomic] and Pymatgen [@ong2013python], LangChain [@langchain2023], Matplotlib and Plotly [@hunter2007matplotlib; @plotly2015], scikit-learn and PyTorch [@pedregosa2011scikit; @paszke2019pytorch], plus additional dependencies listed in `requirements.txt` (including TensorFlow and Hugging Face `transformers`). Documented analysis targets include radial distribution functions, mean-squared displacement, elastic constants, and thermal-conductivity-style studies. **Materials Project** [@jain2013commentary] and **NOMAD** [@draxl2018nomad] queries are implemented in code; **Open Catalyst** [@chanussot2021open] is recorded in the same module as not yet implemented and should not be described as a live integration. A Streamlit [@streamlit2023] application in `gui_app.py` (see `launch_gui.py`) provides a conversational GUI; Crystal Toolkit supports structure-centric views. The project targets Python 3.8+ and runs LAMMPS via a configured executable (subprocess), which can be used on laptops or clusters without built-in scheduler coupling in that driver.
 
@@ -86,7 +90,7 @@ MaterialSim is developed in public on GitHub [@materialsim]. The repository prov
 
 # AI usage disclosure
 
-No generative AI tools were used in preparing this manuscript.
+Generative AI tools were used fix grammatical errors.
 
 # Acknowledgements
 
