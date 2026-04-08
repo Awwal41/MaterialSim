@@ -27,7 +27,6 @@ authors:
   - name: Jodie A. Yuwono
     orcid: 0000-0002-0915-0756
     affiliation: "4"
-
 affiliations:
   - index: 1
     name: Department of Chemical Engineering, University of Michigan, Ann Arbor, MI, United States
@@ -35,13 +34,12 @@ affiliations:
   - index: 2
     name: Johns Hopkins University, Baltimore, MD, United States
     ror: 00za53h95
-- index: 3
+  - index: 3
     name: Department of Chemical Engineering, Louisiana State University, Baton Rouge, LA, United States
     ror: 05ect4e57
   - index: 4
     name: School of Chemical Engineering and Materials Science, The University of Adelaide, Adelaide, South Australia, Australia
     ror: 00892tw58
-  
 date: 8 April 2026
 bibliography: paper.bib
 ---
