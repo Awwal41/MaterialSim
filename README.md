@@ -6,10 +6,6 @@
 
 An autonomous LLM agent for computational materials science and molecular dynamics simulations.
 
-## Journal of Open Source Software (JOSS)
-
-The manuscript for submission to the [Journal of Open Source Software](https://joss.theoj.org/) is in the repository root as **`paper.md`** (Markdown + YAML metadata) with bibliography **`paper.bib`**. Submit using the [JOSS submission form](https://joss.theoj.org/papers/new) and point to this repository; the review bot expects those filenames in the default branch.
-
 ## 🚀 Overview
 
 The MaterialSim AI Agent is a sophisticated system that combines large language models with computational materials science tools to automate molecular dynamics simulations, property calculations, and materials discovery workflows. It enables researchers to perform complex materials simulations through natural language interfaces.
