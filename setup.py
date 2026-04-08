@@ -10,11 +10,11 @@ setup(
     name="materialsim-ai-agent",
     version="0.1.0",
     author="MaterialSim AI Agent Team",
-    author_email="contact@materialsim-ai-agent.com",
+    author_email="awwalola@umich.edu",
     description="An autonomous LLM agent for computational materials science and molecular dynamics",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/materialsim-ai-agent/materialsim-ai-agent",
+    url="https://github.com/Awwal41/MaterialSim",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
