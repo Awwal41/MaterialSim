@@ -4,11 +4,34 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import streamlit as st
 
 from gui import icons
 from gui.state import get_agent, initialize_agent
+
+
+def _update_env_file(updates: dict, path: str = ".env") -> None:
+    """Update/insert keys in a .env file without discarding existing entries."""
+    env_path = Path(path)
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+
+    remaining = dict(updates)
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in remaining:
+                out.append(f"{key}={remaining.pop(key)}")
+                continue
+        out.append(line)
+
+    for key, value in remaining.items():
+        out.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
 def render_settings_page() -> None:
@@ -34,9 +57,7 @@ def render_settings_page() -> None:
         )
 
     if st.button("Save API keys", type="primary", use_container_width=True, icon=icons.SUCCESS):
-        with open(".env", "w", encoding="utf-8") as f:
-            f.write(f"OPENAI_API_KEY={openai_key}\n")
-            f.write(f"MP_API_KEY={mp_key}\n")
+        _update_env_file({"OPENAI_API_KEY": openai_key, "MP_API_KEY": mp_key})
         os.environ["OPENAI_API_KEY"] = openai_key
         os.environ["MP_API_KEY"] = mp_key
         st.cache_resource.clear()

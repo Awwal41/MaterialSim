@@ -1,4 +1,4 @@
-"""Voice command orchestrator — routes spoken/text commands to agent actions."""
+"""Voice command orchestrator — PI-style spoken dialogue for hands-free control."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+from .wake import contains_wake_phrase, greeting_reply, strip_wake_phrase
 
 if TYPE_CHECKING:
     from ..core.agent import MaterialsAgent
@@ -23,23 +25,26 @@ class VoiceResponse:
     success: bool
     data: Optional[Dict[str, Any]] = None
     model_used: Optional[str] = None
+    defer_action: bool = False  # speak first, execute on playback_finished
 
 
 class VoiceOrchestrator:
-    """Interpret voice/text commands and drive the full materials workflow."""
+    """Interpret spoken commands and drive the materials workflow like a PI would."""
 
     INTENT_PATTERNS: Dict[str, List[str]] = {
         "run_simulation": [
             r"\b(simulate|simulation|run\s+(a\s+)?md|molecular\s+dynamics)\b",
             r"\brun\s+(a\s+)?simulation\b",
+            r"\b(do|start|launch|kick\s+off)\b.*\b(run|simulation|md)\b",
+            r"\brun\b.*\b(at|for|with)\b",
         ],
         "analyze": [
-            r"\b(analyz|analysis|analyse)\b",
+            r"\b(analyz|analysis|analyse|interpret)\b",
+            r"\b(how\s+did|how\s+does|tell\s+me\s+about)\b.*\b(result|run|simulation)\b",
             r"\b(rdf|msd|thermodynamic|results?)\b",
         ],
         "predict": [
             r"\b(predict|prediction|forecast)\b",
-            r"\b(property|properties|elastic|conductivity)\b",
         ],
         "research": [
             r"\b(research|paper|literature|arxiv|best\s+model|benchmark)\b",
@@ -48,20 +53,31 @@ class VoiceOrchestrator:
             r"\b(database|materials\s+project|query|lookup)\b",
         ],
         "status": [
-            r"\b(status|ready|online|hello|hey)\b",
+            r"^(status|ready|online|hello|hi)\b",
+            r"^(what\s+can\s+you\s+do|who\s+are\s+you)\b",
         ],
     }
 
     def __init__(self, agent: "MaterialsAgent"):
         self.agent = agent
 
-    def process(self, utterance: str) -> VoiceResponse:
-        """Process a voice or text utterance end-to-end."""
-        utterance = utterance.strip()
+    def process(self, utterance: str, *, raw: str = "") -> VoiceResponse:
+        """Process a voice utterance end-to-end."""
+        raw = (raw or utterance).strip()
+        utterance = strip_wake_phrase(utterance or raw).strip()
+
+        if not utterance and contains_wake_phrase(raw):
+            return VoiceResponse(
+                spoken_text=greeting_reply(),
+                display_text=greeting_reply(),
+                action="greeting",
+                success=True,
+            )
+
         if not utterance:
             return VoiceResponse(
-                spoken_text="I didn't catch that. Please try again.",
-                display_text="No input received.",
+                spoken_text="I didn't catch that. Try saying hey Material Sim, then your request.",
+                display_text="No command heard.",
                 action="none",
                 success=False,
             )
@@ -72,7 +88,7 @@ class VoiceOrchestrator:
         model_id = rec.model_id
 
         if intent == "run_simulation":
-            return self._handle_simulation(utterance, model_id)
+            return self._plan_simulation(utterance, model_id)
         if intent == "analyze":
             return self._handle_analysis(utterance, model_id)
         if intent == "predict":
@@ -86,57 +102,113 @@ class VoiceOrchestrator:
 
         return self._handle_chat(utterance, model_id)
 
+    def execute_simulation(self, utterance: str) -> VoiceResponse:
+        """Run a queued simulation and return a spoken PI-style debrief."""
+        self.agent.reconfigure_llm(utterance, search_online=False)
+        result = self.agent.run_simulation(utterance)
+        return self._simulation_debrief(result, model_id=None)
+
     def _detect_intent(self, text: str) -> str:
         lower = text.lower()
         for intent, patterns in self.INTENT_PATTERNS.items():
             if any(re.search(p, lower) for p in patterns):
                 return intent
+        # Natural imperatives without keywords: "copper at 300 K, ten thousand steps"
+        if re.search(r"\b(at\s+\d+\s*k|\d+\s*steps?|nvt|npt|nve)\b", lower):
+            return "run_simulation"
         return "chat"
 
-    def _handle_simulation(self, utterance: str, model_id: str) -> VoiceResponse:
-        self.agent.reconfigure_llm(utterance)
-        result = self.agent.run_simulation(utterance)
-        if result.get("success"):
-            spoken = (
-                f"Simulation complete. {result['message']}. "
-                f"The output is in {result['simulation_directory']}."
-            )
-            display = f"**Simulation complete**\n\n{result['message']}\n\nDirectory: `{result['simulation_directory']}`"
-            quality = result.get("quality") or {}
-            if quality and not quality.get("converged"):
-                from ..simulation_quality import format_quality_report
-                display += f"\n\n{format_quality_report(quality)}"
-                spoken = (
-                    "Simulation finished, but it did not equilibrate properly. "
-                    + spoken
-                )
-            for w in result.get("warnings", []):
-                display += f"\n- ⚠️ {w}"
+    def _plan_simulation(self, utterance: str, model_id: str) -> VoiceResponse:
+        """Acknowledge like a PI, then defer the heavy run until after TTS."""
+        try:
+            from ..spec.extractor import extract_spec
+
+            spec = extract_spec(utterance, self.agent.config)
+            summary = spec.summary()
+        except Exception:
+            summary = utterance[:120]
+
+        spoken = (
+            f"Got it. {self._speakable_summary(summary)} "
+            "I'll set that up and run it now — give me a moment."
+        )
+        return VoiceResponse(
+            spoken_text=spoken,
+            display_text=f"**Starting simulation**\n\n{summary}",
+            action="run_simulation",
+            success=True,
+            data={"instruction": utterance, "summary": summary},
+            model_used=model_id,
+            defer_action=True,
+        )
+
+    def _simulation_debrief(self, result: Dict[str, Any], model_id: Optional[str]) -> VoiceResponse:
+        if result.get("needs_clarification"):
+            err = result.get("error") or "I need a bit more detail."
             return VoiceResponse(
-                spoken_text=spoken,
-                display_text=display,
+                spoken_text=f"I couldn't start yet. {err}",
+                display_text=f"**Need clarification**\n\n{err}",
                 action="run_simulation",
-                success=True,
+                success=False,
                 data=result,
                 model_used=model_id,
             )
+
+        if not result.get("success"):
+            err = result.get("error", "Unknown error")
+            return VoiceResponse(
+                spoken_text=f"The run failed. {err}",
+                display_text=f"Simulation failed: {err}",
+                action="run_simulation",
+                success=False,
+                data=result,
+                model_used=model_id,
+            )
+
+        quality = result.get("quality") or {}
+        spoken_parts = ["Alright, the run finished."]
+        display = f"**Simulation complete**\n\n{result.get('message', '')}"
+
+        if quality.get("success"):
+            if quality.get("converged"):
+                spoken_parts.append("Thermodynamically, it looks equilibrated.")
+            else:
+                spoken_parts.append(
+                    "Heads up — it didn't fully equilibrate, so treat the numbers cautiously."
+                )
+            if quality.get("avg_temperature") is not None:
+                t = quality["avg_temperature"]
+                spoken_parts.append(f"Production temperature landed near {t:.0f} kelvin.")
+
+        sim_dir = result.get("simulation_directory")
+        if sim_dir:
+            from pathlib import Path as _Path
+
+            spoken_parts.append(f"Outputs are saved under {_Path(sim_dir).name}.")
+            display += f"\n\nDirectory: `{sim_dir}`"
+
+        spoken_parts.append("Want me to walk through the RDF, MSD, or energy trace?")
+
+        for w in result.get("warnings", []):
+            display += f"\n- ⚠️ {w}"
+
         return VoiceResponse(
-            spoken_text=f"Simulation failed. {result.get('error', 'Unknown error')}.",
-            display_text=f"Simulation failed: {result.get('error')}",
+            spoken_text=" ".join(spoken_parts),
+            display_text=display,
             action="run_simulation",
-            success=False,
+            success=True,
             data=result,
             model_used=model_id,
         )
 
     def _handle_analysis(self, utterance: str, model_id: str) -> VoiceResponse:
-        self.agent.reconfigure_llm(utterance)
+        self.agent.reconfigure_llm(utterance, search_online=False)
         from ..analysis_engine import find_simulation_dir
 
         sim_dir = find_simulation_dir()
         if sim_dir is None:
             return VoiceResponse(
-                spoken_text="No simulation results found. Run a simulation first.",
+                spoken_text="I don't see a finished run yet. Tell me what to simulate first.",
                 display_text="No simulation directories found.",
                 action="analyze",
                 success=False,
@@ -146,58 +218,45 @@ class VoiceOrchestrator:
         result = self.agent.analyze_results(str(sim_dir))
         if not result.get("success"):
             return VoiceResponse(
-                spoken_text="Analysis failed.",
+                spoken_text="I couldn't analyze those results.",
                 display_text=f"Analysis failed: {result.get('error')}",
                 action="analyze",
                 success=False,
                 model_used=model_id,
             )
 
-        parts = []
-        spoken_parts = []
-        quality = result.get("quality", {})
-        if quality.get("success"):
-            from ..simulation_quality import format_quality_report
-            parts.append(format_quality_report(quality))
-            if not quality.get("converged"):
-                spoken_parts.append(
-                    "Warning: this simulation did not equilibrate. Results may be unreliable."
-                )
-            else:
-                spoken_parts.append("Simulation quality looks acceptable.")
+        spoken_parts = [f"Here's what I'm seeing in {sim_dir.name}."]
+        parts = [f"**Analysis — {sim_dir.name}**"]
 
-        parts.append(f"**Analysis of {sim_dir.name}**")
+        quality = result.get("quality", {})
+        if quality.get("success") and not quality.get("converged"):
+            spoken_parts.append("The run didn't equilibrate cleanly, so interpret with care.")
+
         rdf = result.get("rdf", {})
         if rdf.get("success") and rdf.get("first_peak"):
             parts.append(f"- RDF first peak: **{rdf['first_peak']:.2f} Å**")
             spoken_parts.append(
-                f"RDF first peak at {rdf['first_peak']:.2f} angstroms."
+                f"Nearest-neighbor shell shows up around {rdf['first_peak']:.2f} angstroms."
             )
+
         thermo = result.get("thermodynamics", {})
         if thermo.get("success"):
             parts.append(
-                f"- Production temperature: **{thermo['avg_temperature']:.1f} ± "
+                f"- Production T: **{thermo['avg_temperature']:.1f} ± "
                 f"{thermo['std_temperature']:.1f} K**"
             )
             spoken_parts.append(
-                f"Production temperature {thermo['avg_temperature']:.0f} kelvin."
+                f"Average production temperature is {thermo['avg_temperature']:.0f} kelvin."
             )
-            if thermo.get("pressure_reliable"):
-                parts.append(f"- Production pressure: **{thermo['avg_pressure']:.1f} bar**")
-            else:
-                parts.append("- Production pressure: **unreliable** (do not interpret)")
+
         msd = result.get("msd", {})
         if msd.get("success"):
             parts.append(f"- Final MSD: **{msd['final_msd']:.4f} Å²**")
             if quality.get("converged"):
-                spoken_parts.append(f"Final MSD {msd['final_msd']:.4f}.")
-            else:
-                spoken_parts.append(
-                    "MSD values are shown but may be unreliable until the run equilibrates."
-                )
+                spoken_parts.append(f"Mean squared displacement ends at {msd['final_msd']:.4f}.")
 
-        if not spoken_parts:
-            spoken_parts = ["Analysis complete."]
+        if len(spoken_parts) == 1:
+            spoken_parts.append("Analysis finished — check the workspace plots for detail.")
 
         return VoiceResponse(
             spoken_text=" ".join(spoken_parts),
@@ -209,7 +268,7 @@ class VoiceOrchestrator:
         )
 
     def _handle_predict(self, utterance: str, model_id: str) -> VoiceResponse:
-        self.agent.reconfigure_llm(utterance)
+        self.agent.reconfigure_llm(utterance, search_online=False)
         material = self.agent._parse_simulation_instruction(utterance)["material"]
         props = re.findall(
             r"\b(elastic|conductivity|band\s*gap|thermal|modulus)\b",
@@ -217,10 +276,9 @@ class VoiceOrchestrator:
         ) or ["general properties"]
         result = self.agent.predict_properties(material, props)
         spoken = (
-            f"Property prediction for {material} is not yet available "
-            "without a trained model."
+            f"I don't have a trained model for {material} yet."
             if not result.get("success")
-            else f"Predictions ready for {material}."
+            else f"Predictions for {material} are ready."
         )
         return VoiceResponse(
             spoken_text=spoken,
@@ -236,26 +294,11 @@ class VoiceOrchestrator:
 
         research = research_task(utterance)
         rec = self.agent.model_router.recommend(utterance, search_online=True)
-
-        lines = [
-            f"**Research: {utterance}**",
-            f"Recommended model: **{rec.model_id}** ({rec.rationale})",
-            "",
-        ]
-        if research["papers"]:
-            lines.append("**Papers (arXiv):**")
-            for p in research["papers"][:3]:
-                lines.append(f"- [{p['title'][:80]}]({p['url']})")
-        if research["web_results"]:
-            lines.append("\n**Web sources:**")
-            for r in research["web_results"][:3]:
-                lines.append(f"- {r['title'][:80]}")
-
         spoken = (
-            f"I researched your question and recommend {rec.model_id}. "
-            f"I found {research['paper_count']} papers and "
-            f"{research['web_count']} web sources."
+            f"I looked that up — found {research['paper_count']} papers and "
+            f"{research['web_count']} web sources. For this task I'd reach for {rec.model_id}."
         )
+        lines = [f"**Research: {utterance}**", f"Model: **{rec.model_id}**"]
         return VoiceResponse(
             spoken_text=spoken,
             display_text="\n".join(lines),
@@ -266,12 +309,12 @@ class VoiceOrchestrator:
         )
 
     def _handle_database(self, utterance: str, model_id: str) -> VoiceResponse:
-        self.agent.reconfigure_llm(utterance)
+        self.agent.reconfigure_llm(utterance, search_online=False)
         result = self.agent.query_database(utterance)
         spoken = (
             "Database query complete."
             if result.get("success")
-            else "Database query failed. Check your Materials Project API key."
+            else "Database lookup failed — check your Materials Project key in Settings."
         )
         return VoiceResponse(
             spoken_text=spoken,
@@ -285,25 +328,19 @@ class VoiceOrchestrator:
     def _handle_status(self, model_id: str) -> VoiceResponse:
         n_tools = len(self.agent.tools)
         spoken = (
-            f"MaterialSim online. {n_tools} tools available. "
-            "I can run simulations, analyze results, and search literature."
+            f"Material Sim is online with {n_tools} tools. "
+            "Say hey Material Sim, then tell me what to run or analyze."
         )
         return VoiceResponse(
             spoken_text=spoken,
-            display_text=(
-                f"**Material Sim Agent — Status**\n\n"
-                f"- Tools: {n_tools}\n"
-                f"- Active model: `{model_id}`\n"
-                f"- Voice: enabled\n"
-                f"- MD engine: ASE (real physics)"
-            ),
+            display_text=f"**Online** — {n_tools} tools, model `{model_id}`",
             action="status",
             success=True,
             model_used=model_id,
         )
 
     def _handle_chat(self, utterance: str, model_id: str) -> VoiceResponse:
-        self.agent.reconfigure_llm(utterance)
+        self.agent.reconfigure_llm(utterance, search_online=False)
         reply = self.agent.chat(utterance)
         spoken = _voice_summary(reply)
         return VoiceResponse(
@@ -314,11 +351,21 @@ class VoiceOrchestrator:
             model_used=model_id,
         )
 
+    @staticmethod
+    def _speakable_summary(summary: str) -> str:
+        s = summary.replace("protocol=", "using ")
+        s = s.replace("potential=", "with ")
+        s = s.replace("engine=", "on ")
+        s = s.replace("dt=", "timestep ")
+        s = s.replace("steps", " steps")
+        s = s.replace("@", " at ")
+        s = s.replace("K", " kelvin")
+        s = s.replace(",", ", ")
+        return s
 
-def _voice_summary(text: str, max_chars: int = 500) -> str:
+
+def _voice_summary(text: str, max_chars: int = 480) -> str:
     """Shorten assistant text for natural spoken replies."""
-    import re
-
     clean = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     clean = re.sub(r"`([^`]+)`", r"\1", clean)
     clean = re.sub(r"#+\s*", "", clean)

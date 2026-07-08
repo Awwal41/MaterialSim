@@ -176,8 +176,25 @@ def _build_alloy(
 
 
 def _guess_lattice(symbol: str) -> float:
-    guesses = {"Cu": 3.61, "Al": 4.05, "Ni": 3.52, "Fe": 2.87, "Au": 4.08, "Ag": 4.09}
-    return guesses.get(symbol, 3.6)
+    """Best-effort cubic lattice constant (A) from ASE reference data.
+
+    Uses ASE's tabulated experimental reference states when available, and
+    otherwise estimates a nearest-neighbour spacing from covalent radii. This
+    replaces the previous hardcoded 6-element table + ``3.6`` magic default so
+    arbitrary elements get physically reasonable cells.
+    """
+    from ase.data import atomic_numbers, covalent_radii, reference_states
+
+    z = atomic_numbers.get(symbol)
+    if z is not None:
+        ref = reference_states[z] if z < len(reference_states) else None
+        if ref and ref.get("a"):
+            return float(ref["a"])
+        r = covalent_radii[z] if z < len(covalent_radii) else 0.0
+        if r:
+            # FCC nearest-neighbour distance d = a/sqrt(2); d ~= 2 * r.
+            return float(2.0 * r * (2.0 ** 0.5))
+    return 3.6
 
 
 def _from_database(formula: str, props) -> Atoms:
@@ -219,11 +236,22 @@ def _build_fallback(formula: str, *, mp_api_key: Optional[str] = None) -> Atoms:
     if atoms is not None:
         return atoms
 
-    for crystal in ("fcc", "bcc", "diamond", "zincblende", "rocksalt", "wurtzite", "sc"):
-        try:
-            return bulk(formula, crystal, a=3.6, cubic=True)
-        except Exception:
-            continue
+    # Single-element fallback: use the element's real reference structure and
+    # lattice constant rather than a fixed a=3.6 A cell.
+    from ase.data import atomic_numbers, reference_states
+
+    if formula in atomic_numbers:
+        z = atomic_numbers[formula]
+        ref = reference_states[z] if z < len(reference_states) else None
+        sym = (ref or {}).get("symmetry")
+        a = _guess_lattice(formula)
+        prototypes = [sym] if sym in {"fcc", "bcc", "hcp", "diamond", "sc"} else []
+        prototypes += ["fcc", "bcc", "sc"]
+        for crystal in prototypes:
+            try:
+                return bulk(formula, crystal, a=a, cubic=(crystal != "hcp"))
+            except Exception:
+                continue
 
     # Last resort: fetch from Materials Project when configured.
     from .mp_structure import fetch_mp_structure, mp_available
@@ -270,15 +298,29 @@ def _try_pymatgen_bulk(formula: str) -> Optional[Atoms]:
             if ratio <= 1.5
             else ["rocksalt", "fluorite", "cesiumchloride"]
         )
+        a_guess = _estimate_binary_lattice(a_el, b_el)
         for crystal in prototypes:
             try:
-                return bulk(f"{a_el}{b_el}", crystal, a=3.6, cubic=True)
+                return bulk(f"{a_el}{b_el}", crystal, a=a_guess, cubic=True)
             except Exception:
                 try:
-                    return bulk(comp.reduced_formula, crystal, a=3.6, cubic=True)
+                    return bulk(comp.reduced_formula, crystal, a=a_guess, cubic=True)
                 except Exception:
                     continue
     return None
+
+
+def _estimate_binary_lattice(a_el: str, b_el: str) -> float:
+    """Estimate a cubic lattice constant for a binary from covalent radii."""
+    from ase.data import atomic_numbers, covalent_radii
+
+    try:
+        ra = covalent_radii[atomic_numbers[a_el]]
+        rb = covalent_radii[atomic_numbers[b_el]]
+    except (KeyError, IndexError):
+        return 4.5
+    # Rocksalt-like: a ~= 2 * (r_a + r_b); clamp to a sane range.
+    return float(max(3.0, min(2.0 * (ra + rb), 8.0)))
 
 
 def _resize_supercell(cell: Atoms, target_atoms: int) -> Atoms:

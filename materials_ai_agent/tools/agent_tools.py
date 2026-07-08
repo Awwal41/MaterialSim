@@ -9,8 +9,9 @@ from typing import List, Optional
 from langchain_core.tools import tool
 
 from ..analysis_engine import analyze_all, find_simulation_dir
-from ..simulation_parser import parse_simulation_instruction
-from ..simple_simulation import run_from_spec, run_simple_simulation
+from ..orchestrator import run_spec
+from ..simple_simulation import run_simple_simulation
+from ..spec.extractor import extract_spec
 
 
 def create_agent_tools(config) -> List:
@@ -31,23 +32,28 @@ def create_agent_tools(config) -> List:
         structure_source: Optional[str] = None,
         mp_material_id: Optional[str] = None,
         supercell_reps: Optional[str] = None,
+        engine: Optional[str] = None,
+        protocol: Optional[str] = None,
     ) -> str:
         """Run molecular dynamics simulation and return a summary.
 
         Args:
-            material: Material formula, e.g. 'Cu', 'Al', 'Al2O3', 'CuNi', or 'custom' with a file.
+            material: Formula ('Cu', 'Al2O3', 'CuNi'), SMILES, or 'custom' with a file.
             temperature: Temperature in Kelvin.
             pressure: Pressure in atm (for NPT).
             n_steps: Number of MD steps to run.
-            force_field: Preferred potential ('emt', 'lj', 'eam', 'tersoff').
+            force_field: Potential kind ('auto', 'emt', 'lj', 'eam', 'tersoff',
+                'meam', 'reaxff', 'mace', 'chgnet', 'm3gnet', 'opls', 'gaff').
             ensemble: Thermodynamic ensemble ('NVE', 'NVT', 'NPT').
-            thermostat: Thermostat ('Langevin', 'Berendsen', 'Nose-Hoover').
+            thermostat: Thermostat ('auto', 'langevin', 'berendsen', 'nose-hoover').
             timestep: Integration timestep in ps.
             target_atoms: Approximate number of atoms in the generated supercell.
             structure_file: Path to XYZ/CIF/POSCAR/PDB to load instead of building.
             structure_source: 'generate', 'file'/'upload', or 'material_project'.
             mp_material_id: Materials Project id (e.g. 'mp-1234') when MP is the source.
             supercell_reps: Supercell as '4x4x4' when replicating a loaded structure.
+            engine: 'auto', 'ase', 'lammps', or 'openmm'.
+            protocol: 'equilibrium', 'nemd', 'msst', or 'deformation'.
         """
         reps = None
         if supercell_reps:
@@ -78,29 +84,53 @@ def create_agent_tools(config) -> List:
             structure_source=resolved_source,
             mp_material_id=mp_material_id,
             supercell_reps=reps,
+            engine=engine,
+            protocol=protocol,
         )
         if result.get("success"):
             return (
                 f"{result['message']}. Output written to "
                 f"{result['simulation_directory']}."
             )
+        if result.get("needs_clarification"):
+            return f"I need more information before running: {result.get('error')}"
         return f"Simulation failed: {result.get('error')}"
 
     @tool
     def run_simulation_from_instruction(instruction: str) -> str:
         """Parse a natural-language MD request and run the simulation.
 
+        Handles engine/potential/protocol/system selection automatically.
         Examples: 'NPT CuNi alloy at 800 K and 50 bar for 20 ps',
-        '256 atom Al supercell NVT at 500 K for 5000 steps'.
+        'MSST shock of Cu along z at 8 km/s', 'NEMD thermal conductivity of Si',
+        'MACE simulation of LiFePO4 at 300 K', 'tensile test of Al along x'.
         """
-        spec = parse_simulation_instruction(instruction, config)
-        result = run_from_spec(spec)
+        spec = extract_spec(instruction, config)
+        result = run_spec(spec, mp_api_key=getattr(config, "mp_api_key", None))
         if result.get("success"):
             return (
                 f"Parsed: {spec.summary()}. {result['message']} "
                 f"Output: {result['simulation_directory']}."
             )
+        if result.get("needs_clarification"):
+            return f"I need more information before running: {result.get('error')}"
         return f"Simulation failed: {result.get('error')}"
+
+    @tool
+    def list_simulation_capabilities() -> str:
+        """List which MD engines, potentials, and protocols are available here."""
+        from ..bootstrap import ensure
+        from ..engines.registry import available_engines, list_engines
+        from ..protocols.registry import list_protocols
+
+        ensure()
+        engines = available_engines()
+        installed = ", ".join(engines) if engines else "none"
+        return (
+            f"Engines installed: {installed} (registered: {', '.join(list_engines())}). "
+            f"Runnable potentials: {', '.join(config.runnable_force_fields())}. "
+            f"Protocols: {', '.join(list_protocols())}."
+        )
 
     @tool
     def analyze_simulation(simulation_directory: str) -> str:
@@ -180,6 +210,7 @@ def create_agent_tools(config) -> List:
     return [
         run_md_simulation,
         run_simulation_from_instruction,
+        list_simulation_capabilities,
         analyze_simulation,
         list_available_materials,
         locate_latest_simulation,

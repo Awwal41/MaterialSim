@@ -2,156 +2,269 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <script src="https://unpkg.com/streamlit-component-lib@1.0.0/dist/index.js"></script>
+  <script>
+    (function () {
+      var ComponentMessageType = {
+        COMPONENT_READY: "streamlit:componentReady",
+        SET_COMPONENT_VALUE: "streamlit:setComponentValue",
+        SET_FRAME_HEIGHT: "streamlit:setFrameHeight",
+      };
+
+      window.Streamlit = {
+        API_VERSION: 1,
+        RENDER_EVENT: "streamlit:render",
+        events: new EventTarget(),
+        registeredMessageListener: false,
+        lastFrameHeight: null,
+
+        setComponentReady: function () {
+          if (!this.registeredMessageListener) {
+            window.addEventListener("message", this.onMessageEvent.bind(this));
+            this.registeredMessageListener = true;
+          }
+          this.sendBackMsg(ComponentMessageType.COMPONENT_READY, {
+            apiVersion: this.API_VERSION,
+          });
+        },
+
+        setComponentValue: function (value) {
+          this.sendBackMsg(ComponentMessageType.SET_COMPONENT_VALUE, {
+            value: value,
+            dataType: "json",
+          });
+          this.setFrameHeight();
+        },
+
+        setFrameHeight: function (height) {
+          if (height === undefined) {
+            height = document.body.scrollHeight;
+          }
+          if (height === this.lastFrameHeight) return;
+          this.lastFrameHeight = height;
+          this.sendBackMsg(ComponentMessageType.SET_FRAME_HEIGHT, { height: height });
+        },
+
+        onMessageEvent: function (event) {
+          var type = event.data && event.data.type;
+          if (type === this.RENDER_EVENT) {
+            this.onRenderMessage(event.data);
+          }
+        },
+
+        onRenderMessage: function (data) {
+          var args = data.args || {};
+          var disabled = Boolean(data.disabled);
+          var event = new CustomEvent(this.RENDER_EVENT, {
+            detail: { disabled: disabled, args: args },
+          });
+          this.events.dispatchEvent(event);
+          this.setFrameHeight();
+        },
+
+        sendBackMsg: function (type, data) {
+          var msg = { isStreamlitMessage: true, type: type };
+          for (var key in data) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) {
+              msg[key] = data[key];
+            }
+          }
+          window.parent.postMessage(msg, "*");
+        },
+      };
+    })();
+  </script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: "Segoe UI", system-ui, sans-serif;
       background: transparent;
       color: #e8edf4;
-      padding: 0.5rem 0;
+      padding: 0;
+      overflow: hidden;
     }
     .wrap {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 0.75rem;
-    }
-    .mic-btn {
-      width: 72px;
-      height: 72px;
-      border-radius: 50%;
-      border: 2px solid rgba(45, 212, 191, 0.45);
-      background: radial-gradient(circle at 35% 30%, #2dd4bf 0%, #0d9488 55%, #042f2e 100%);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
       justify-content: center;
-      box-shadow: 0 0 24px rgba(45, 212, 191, 0.35);
-      transition: transform 0.15s ease, box-shadow 0.15s ease;
-      position: relative;
+      min-height: 88px;
+      gap: 0.5rem;
     }
-    .mic-btn:hover { transform: scale(1.04); }
-    .mic-btn.active {
-      animation: pulse 1.2s ease-in-out infinite;
-      box-shadow: 0 0 36px rgba(45, 212, 191, 0.65);
-    }
-    .mic-btn svg { width: 28px; height: 28px; fill: #042f2e; }
-    .rings {
-      position: absolute;
-      inset: -12px;
+    .orb {
+      width: 56px;
+      height: 56px;
       border-radius: 50%;
-      border: 1px solid rgba(45, 212, 191, 0.25);
-      animation: ring 2s ease-out infinite;
-      pointer-events: none;
-      opacity: 0;
+      background: radial-gradient(circle at 35% 30%, #2dd4bf 0%, #0d9488 55%, #042f2e 100%);
+      box-shadow: 0 0 20px rgba(45, 212, 191, 0.35);
+      position: relative;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
     }
-    .mic-btn.active .rings { opacity: 1; }
+    .orb.listening {
+      animation: breathe 1.4s ease-in-out infinite;
+      box-shadow: 0 0 32px rgba(52, 211, 153, 0.65);
+    }
+    .orb.thinking {
+      background: radial-gradient(circle at 35% 30%, #fde68a 0%, #f59e0b 55%, #451a03 100%);
+      animation: think 0.9s ease-in-out infinite;
+    }
+    .orb.speaking {
+      animation: speak 0.5s ease-in-out infinite;
+      box-shadow: 0 0 36px rgba(45, 212, 191, 0.8);
+    }
+    .ring {
+      position: absolute;
+      inset: -10px;
+      border-radius: 50%;
+      border: 1px solid rgba(45, 212, 191, 0.35);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .orb.listening .ring {
+      opacity: 1;
+      animation: ring 2s ease-out infinite;
+    }
     .status {
-      font-size: 0.82rem;
-      letter-spacing: 0.06em;
+      font-size: 0.72rem;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: #8b9cb3;
-      min-height: 1.2em;
+      color: #6b8f9c;
+      text-align: center;
+      min-height: 1.1em;
     }
     .status.live { color: #2dd4bf; }
-    .transcript {
-      width: 100%;
-      min-height: 2.5rem;
+    .status.busy { color: #fbbf24; }
+    .status.speak { color: #5eead4; }
+    .live-caption {
+      font-size: 0.82rem;
+      color: rgba(204, 239, 232, 0.55);
       text-align: center;
-      font-size: 0.95rem;
-      line-height: 1.45;
-      color: #ccefe8;
+      max-width: 420px;
+      min-height: 1.2em;
+      font-style: italic;
       padding: 0 0.5rem;
     }
-    .transcript .interim { color: #6b8f9c; font-style: italic; }
-    .hint {
-      font-size: 0.78rem;
-      color: #6b7c90;
-      text-align: center;
-      max-width: 320px;
-      line-height: 1.4;
-    }
-    @keyframes pulse {
+    .live-caption.hidden { visibility: hidden; height: 0; min-height: 0; overflow: hidden; }
+    @keyframes breathe {
       0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.06); }
+      50% { transform: scale(1.08); }
+    }
+    @keyframes think {
+      0%, 100% { transform: scale(1) rotate(0deg); }
+      50% { transform: scale(1.06) rotate(4deg); }
+    }
+    @keyframes speak {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.12); }
     }
     @keyframes ring {
-      0% { transform: scale(1); opacity: 0.6; }
-      100% { transform: scale(1.35); opacity: 0; }
+      0% { transform: scale(1); opacity: 0.55; }
+      100% { transform: scale(1.45); opacity: 0; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <button class="mic-btn" id="micBtn" type="button" title="Tap to talk">
-      <span class="rings"></span>
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
-      </svg>
-    </button>
-    <div class="status" id="status">Tap the microphone to start</div>
-    <div class="transcript" id="transcript"></div>
-    <div class="hint" id="hint">Conversation mode: speak naturally, pause when finished — I'll reply aloud and listen again.</div>
+    <div class="orb" id="orb"><span class="ring"></span></div>
+    <div class="status" id="status">Starting…</div>
+    <div class="live-caption hidden" id="caption"></div>
   </div>
+  <audio id="player" preload="auto"></audio>
 
   <script>
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const micBtn = document.getElementById("micBtn");
+    const orb = document.getElementById("orb");
     const statusEl = document.getElementById("status");
-    const transcriptEl = document.getElementById("transcript");
-    const hintEl = document.getElementById("hint");
+    const captionEl = document.getElementById("caption");
+    const player = document.getElementById("player");
 
     let recognition = null;
     let listening = false;
     let shouldListen = false;
+    let alwaysOn = true;
+    let pauseListening = false;
+    let showCaption = false;
     let finalBuffer = "";
     let silenceTimer = null;
     let lastSent = "";
-
-    function setStatus(text, live) {
-      statusEl.textContent = text;
-      statusEl.className = live ? "status live" : "status";
-    }
+    let wakeOnlyMode = true;
+    let wakePatterns = [
+      /hey\s+material\s+sim/i,
+      /hey\s+materials\s+sim/i,
+      /material\s+sim\s+agent/i,
+      /material\s+sim/i,
+      /hey\s+material\b/i,
+    ];
 
     function send(payload) {
       Streamlit.setComponentValue(payload);
     }
 
-    function resetTranscript() {
-      finalBuffer = "";
-      transcriptEl.innerHTML = "";
+    function setOrb(state) {
+      orb.className = "orb" + (state ? " " + state : "");
     }
 
-    function showTranscript(interim) {
-      const finalPart = finalBuffer ? `<span>${finalBuffer}</span> ` : "";
-      const interimPart = interim ? `<span class="interim">${interim}</span>` : "";
-      transcriptEl.innerHTML = finalPart + interimPart;
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = "status" + (cls ? " " + cls : "");
+    }
+
+    function stripWake(text) {
+      let t = text.trim();
+      for (const p of wakePatterns) {
+        t = t.replace(p, "").trim();
+      }
+      return t.replace(/^[,.\s]+/, "").trim();
+    }
+
+    function hasWake(text) {
+      const lower = text.toLowerCase();
+      return wakePatterns.some((p) => p.test(lower));
+    }
+
+    function resetBuffer() {
+      finalBuffer = "";
+      if (showCaption) captionEl.textContent = "";
     }
 
     function finishUtterance() {
-      const text = finalBuffer.trim();
-      resetTranscript();
-      if (text && text !== lastSent) {
-        lastSent = text;
-        stopListening();
-        send({ utterance: text, event: "utterance" });
+      clearTimeout(silenceTimer);
+      let text = finalBuffer.trim();
+      resetBuffer();
+      if (!text) return;
+
+      if (wakeOnlyMode && !hasWake(text)) {
+        // Always-on: ignore chatter until the wake phrase is heard.
+        setStatus("Listening for “Hey Material Sim”…", "live");
+        return;
       }
+
+      const command = stripWake(text) || text;
+      if (!command) {
+        send({ event: "wake_only", utterance: text });
+        stopListening(false);
+        return;
+      }
+
+      if (command === lastSent) return;
+      lastSent = command;
+      stopListening(false);
+      setOrb("thinking");
+      setStatus("Working on it…", "busy");
+      send({ event: "utterance", utterance: command, raw: text });
     }
 
-    function scheduleFinish() {
+    function scheduleFinish(delayMs) {
       clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(finishUtterance, 1200);
+      silenceTimer = setTimeout(finishUtterance, delayMs || 900);
     }
 
     function startListening() {
       if (!SpeechRecognition) {
-        setStatus("Speech recognition not supported in this browser", false);
-        hintEl.textContent = "Use Chrome or Edge, or type your message below.";
-        send({ utterance: null, event: "unsupported" });
+        setStatus("Use Chrome or Edge for voice", "");
+        send({ event: "unsupported" });
         return;
       }
-      if (listening) return;
+      if (listening || pauseListening) return;
 
       recognition = new SpeechRecognition();
       recognition.lang = "en-US";
@@ -160,8 +273,8 @@
 
       recognition.onstart = () => {
         listening = true;
-        micBtn.classList.add("active");
-        setStatus("Listening…", true);
+        setOrb("listening");
+        setStatus(wakeOnlyMode ? "Say “Hey Material Sim”…" : "Listening…", "live");
       };
 
       recognition.onresult = (event) => {
@@ -174,67 +287,122 @@
             interim += t;
           }
         }
-        showTranscript(interim);
-        if (finalBuffer) scheduleFinish();
+        if (showCaption) {
+          captionEl.classList.remove("hidden");
+          captionEl.textContent = interim || finalBuffer;
+        }
+        if (finalBuffer) scheduleFinish(850);
       };
 
       recognition.onerror = (e) => {
         if (e.error === "no-speech") {
-          setStatus("No speech detected — tap to try again", false);
-        } else if (e.error !== "aborted") {
-          setStatus("Mic error: " + e.error, false);
-          send({ utterance: null, event: "error", detail: e.error });
+          if (alwaysOn && !pauseListening) {
+            setTimeout(() => { try { recognition.start(); } catch (_) {} }, 300);
+          }
+          return;
         }
-        stopListening();
+        if (e.error !== "aborted") {
+          setStatus("Mic: " + e.error, "");
+        }
+        listening = false;
+        if (alwaysOn && !pauseListening) {
+          setTimeout(startListening, 600);
+        }
       };
 
       recognition.onend = () => {
         listening = false;
-        micBtn.classList.remove("active");
-        if (shouldListen) {
-          try { recognition.start(); } catch (_) {}
-        } else {
-          setStatus("Tap the microphone to speak", false);
+        if (shouldListen && !pauseListening) {
+          try { recognition.start(); } catch (_) {
+            setTimeout(startListening, 400);
+          }
         }
       };
 
       shouldListen = true;
-      try {
-        recognition.start();
-      } catch (_) {}
+      try { recognition.start(); } catch (_) {}
     }
 
-    function stopListening() {
-      shouldListen = false;
+    function stopListening(keepShouldListen) {
+      if (keepShouldListen === undefined) keepShouldListen = false;
+      shouldListen = keepShouldListen;
       clearTimeout(silenceTimer);
       if (recognition && listening) {
         try { recognition.stop(); } catch (_) {}
       }
-      micBtn.classList.remove("active");
-      setStatus("Processing…", false);
+      listening = false;
     }
 
-    micBtn.addEventListener("click", () => {
-      if (listening) {
-        finishUtterance();
-      } else {
-        lastSent = "";
-        resetTranscript();
-        startListening();
+    function playAudioB64(b64, mime) {
+      if (!b64) {
+        onPlaybackFinished();
+        return;
       }
-    });
+      pauseListening = true;
+      stopListening(false);
+      setOrb("speaking");
+      setStatus("Speaking…", "speak");
+      player.src = "data:" + (mime || "audio/mpeg") + ";base64," + b64;
+      player.onended = () => onPlaybackFinished();
+      player.onerror = () => onPlaybackFinished();
+      player.play().catch(() => onPlaybackFinished());
+    }
+
+    function onPlaybackFinished() {
+      player.onended = null;
+      pauseListening = false;
+      lastSent = "";
+      setOrb("");
+      setStatus(wakeOnlyMode ? "Say “Hey Material Sim”…" : "Listening…", "live");
+      send({ event: "playback_finished" });
+      if (alwaysOn) {
+        setTimeout(startListening, 350);
+      }
+    }
 
     function onRender(event) {
       const args = event.detail.args || {};
-      if (args.auto_listen && !listening) {
-        setTimeout(() => startListening(), args.delay_ms || 400);
+      alwaysOn = args.always_on !== false;
+      wakeOnlyMode = args.wake_only !== false;
+      showCaption = args.show_caption === true;
+      pauseListening = args.pause_listening === true;
+
+      if (!showCaption) {
+        captionEl.classList.add("hidden");
       }
-      if (args.hint) hintEl.textContent = args.hint;
+
+      if (args.agent_state === "thinking") {
+        pauseListening = true;
+        stopListening(false);
+        setOrb("thinking");
+        setStatus(args.status_text || "Working on it…", "busy");
+      } else if (args.agent_state === "speaking") {
+        pauseListening = true;
+        stopListening(false);
+      } else if (args.agent_state === "listening") {
+        pauseListening = false;
+        if (alwaysOn && !listening) startListening();
+      } else if (args.agent_state === "idle" && alwaysOn && !pauseListening && !listening) {
+        setOrb("");
+        setStatus(wakeOnlyMode ? "Say “Hey Material Sim”…" : "Listening…", "live");
+        setTimeout(startListening, args.delay_ms || 300);
+      }
+
+      if (args.status_text && !args.agent_state) {
+        setStatus(args.status_text, args.status_live ? "live" : "");
+      }
+
+      if (args.audio_b64) {
+        playAudioB64(args.audio_b64, args.audio_mime || "audio/mpeg");
+      } else if (args.auto_listen && !pauseListening && !listening) {
+        setTimeout(startListening, args.delay_ms || 400);
+      }
     }
 
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
     Streamlit.setComponentReady();
-    send({ utterance: null, event: "ready" });
+    send({ event: "ready" });
+    setTimeout(startListening, 500);
   </script>
 </body>
 </html>

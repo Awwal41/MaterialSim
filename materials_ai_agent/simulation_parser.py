@@ -101,7 +101,10 @@ def _extract_material(instruction: str, lower: str, db: MaterialsDatabase) -> st
     if m:
         return m.group(1)
 
-    return "Cu"
+    # No material could be resolved. Never silently substitute a default
+    # (previously this returned "Cu"), which produced confidently-wrong runs.
+    # Callers must detect the sentinel and ask the user to clarify.
+    return "unresolved"
 
 
 def _extract_temperature(lower: str, config: Config) -> float:

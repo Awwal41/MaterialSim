@@ -124,6 +124,9 @@ def print_result(result: dict):
         for key in ('result', 'analysis', 'predictions', 'results'):
             if key in result and not isinstance(result[key], dict):
                 print(result[key])
+    elif result.get('needs_clarification'):
+        print("Need more information:")
+        print(result.get('error', 'Please clarify your request.'))
     else:
         print("Failed!")
         if 'error' in result:

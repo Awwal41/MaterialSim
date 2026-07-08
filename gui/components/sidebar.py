@@ -44,7 +44,10 @@ def render_sidebar() -> None:
             key="sidebar_clear_chat",
         ):
             st.session_state.messages = []
-            st.session_state.simulation_workflow["step"] = 0
+            st.session_state.pop("_ws_analysis", None)
+            if agent := get_agent():
+                if hasattr(agent, "reset_conversation"):
+                    agent.reset_conversation()
             st.rerun()
 
         if st.button(
@@ -59,11 +62,11 @@ def render_sidebar() -> None:
             st.rerun()
 
         st.markdown("---")
-        st.markdown(f"**{icons.CHAT} Try asking**")
+        st.markdown(f"**{icons.CHAT} Quick starts**")
         examples = [
-            ("Simulate copper at 300K", icons.PLAY),
-            ("Analyze RDF for my last run", icons.RDF),
-            ("What is NVT ensemble?", icons.INFO),
+            ("Copper at 500 K in NPT for 50k steps", icons.PLAY),
+            ("Thermal conductivity of argon via NEMD", icons.THERMO),
+            ("Shock silicon with MSST", icons.SCIENCE),
         ]
         for i, (example, icon) in enumerate(examples):
             if st.button(
@@ -72,6 +75,6 @@ def render_sidebar() -> None:
                 use_container_width=True,
                 key=f"example_{i}",
             ):
-                st.session_state.messages.append({"role": "user", "content": example})
-                st.session_state._pending_prompt = example
+                st.session_state.ws_nl = example
+                st.session_state._ws_do_parse = True
                 st.rerun()

@@ -40,6 +40,8 @@ class MaterialsAgent:
         self.llm = None
         self.agent = None
         self._current_model: Optional[str] = None
+        # Conversation memory so the LLM can hold a genuine multi-turn dialogue.
+        self._chat_history: List = []
         self._init_llm_agent()
 
         self.logger.info(
@@ -92,12 +94,12 @@ class MaterialsAgent:
             self.llm = None
             self.agent = None
 
-    def reconfigure_llm(self, task_description: str) -> str:
+    def reconfigure_llm(self, task_description: str, *, search_online: bool = True) -> str:
         """Pick the best model for *task_description* and re-init if needed.
 
         Returns the model ID now in use.
         """
-        rec = self.model_router.recommend(task_description, search_online=True)
+        rec = self.model_router.recommend(task_description, search_online=search_online)
         if rec.model_id != self._current_model and rec.provider == "openai":
             self.logger.info(
                 "Switching LLM: %s -> %s (%s)",
@@ -112,22 +114,27 @@ class MaterialsAgent:
     def _system_prompt() -> str:
         return (
             "You are the Material Sim Agent, an expert in computational "
-            "materials science and molecular dynamics. You can run MD simulations, "
-            "analyze their results, search literature, and recommend the best "
-            "approaches. When a user asks you to run a simulation, call the "
-            "simulation tool rather than only describing what to do. "
-            "Users may supply their own structure files (XYZ, CIF, POSCAR) or "
-            "Materials Project ids (mp-####); pass structure_file, structure_source, "
-            "or mp_material_id to run_md_simulation when they do. "
-            "For complex requests (alloys, NPT, pressure, supercells, compounds, "
-            "duration in ps/ns), prefer run_simulation_from_instruction. "
+            "materials science and molecular dynamics. You orchestrate real MD "
+            "engines (ASE, LAMMPS, OpenMM), any registered interatomic potential "
+            "(EMT, Lennard-Jones, EAM, Tersoff, MEAM, ReaxFF, machine-learned "
+            "potentials like MACE/CHGNet/M3GNet, and bonded force fields like "
+            "OPLS/GAFF/OpenFF), and multiple protocols (equilibrium, NEMD for "
+            "transport, MSST for shock, deformation for mechanics). Nothing is "
+            "hardcoded to a particular material or application. "
+            "When a user asks you to run a simulation, call the simulation tool "
+            "rather than only describing what to do, and prefer "
+            "run_simulation_from_instruction for anything beyond a bare formula. "
+            "If the request does not specify the system clearly, ask a clarifying "
+            "question instead of guessing a material. Users may supply structure "
+            "files (XYZ/CIF/POSCAR/PDB), Materials Project ids (mp-####), or SMILES "
+            "for molecules/polymers. "
             "Always check simulation quality: if temperature, pressure, or "
-            "equilibration warnings are present, explain clearly that the run "
-            "did not converge and suggest fixes (longer equilibration, smaller "
-            "timestep, or EMT-supported metals like Cu/Al instead of Si with LJ). "
-            "Never present unphysical averages from the equilibration phase as "
-            "final results. Explain results using correct scientific terminology "
-            "and units. Be concise when responding via voice."
+            "equilibration warnings are present, explain clearly that the run did "
+            "not converge and suggest fixes. If a requested potential/engine is "
+            "unavailable, relay the explicit error and suggest an installed "
+            "alternative rather than pretending it ran. Explain results using "
+            "correct scientific terminology and units. Be concise when responding "
+            "via voice."
         )
 
     def process_command(self, utterance: str):
@@ -167,10 +174,11 @@ class MaterialsAgent:
         """
         self.logger.info("Running simulation: %s", instruction)
         try:
-            params = self._parse_simulation_instruction(instruction)
-            from ..simple_simulation import run_simple_simulation
+            from ..orchestrator import run_spec
+            from ..spec.extractor import extract_spec
 
-            return run_simple_simulation(**params)
+            spec = extract_spec(instruction, self.config)
+            return run_spec(spec, mp_api_key=self.config.mp_api_key)
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Simulation failed")
             return {"success": False, "error": str(exc)}
@@ -245,20 +253,44 @@ class MaterialsAgent:
     # ------------------------------------------------------------------
     # Optional conversational interface
     # ------------------------------------------------------------------
-    def chat(self, message: str) -> str:
-        """Chat with the agent (requires a configured LLM)."""
-        self.reconfigure_llm(message)
+    def chat(self, message: str, *, remember: bool = True) -> str:
+        """Chat with the agent, with full multi-turn memory and tool access.
+
+        The LLM is unrestricted: it can freely converse, ask the user clarifying
+        questions, and call any registered tool (run/analyze simulations, list
+        capabilities, research literature). Conversation history is retained
+        across calls so it behaves like a real assistant, not a one-shot prompt.
+
+        Args:
+            message: The user's message.
+            remember: Keep this exchange in the conversation history (default True).
+        """
+        # Keep chat responsive: pick a model from cached/curated defaults rather
+        # than doing a web search on every turn.
+        self.reconfigure_llm(message, search_online=False)
         if self.agent is None:
             return (
                 "Conversational chat is unavailable because no OpenAI API key is "
-                "configured. You can still run simulations and analyses directly."
+                "configured. Set OPENAI_API_KEY to enable the assistant. You can "
+                "still run simulations and analyses directly."
             )
         try:
-            result = self.agent.invoke({"messages": [("user", message)]})
+            history = list(self._chat_history)
+            history.append(("user", message))
+            result = self.agent.invoke(
+                {"messages": history},
+                config={"recursion_limit": 50},
+            )
             messages = result.get("messages", [])
-            if messages:
-                return getattr(messages[-1], "content", str(messages[-1]))
-            return ""
+            reply = getattr(messages[-1], "content", str(messages[-1])) if messages else ""
+            if remember:
+                # Persist the full turn (including any tool messages) for context.
+                self._chat_history = messages
+            return reply
         except Exception as exc:  # noqa: BLE001
             self.logger.exception("Chat failed")
             return f"I encountered an error: {exc}"
+
+    def reset_conversation(self) -> None:
+        """Clear the multi-turn conversation memory."""
+        self._chat_history = []

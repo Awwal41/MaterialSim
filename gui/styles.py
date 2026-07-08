@@ -30,7 +30,15 @@ html, body, [class*="css"] {{
 .block-container {{
     padding-top: 1.25rem;
     padding-bottom: 5rem;
-    max-width: 1120px;
+    max-width: 1500px;
+}}
+
+/* Tabs polish for the workspace stage */
+.stTabs [data-baseweb="tab-list"] {{
+    gap: 0.25rem;
+}}
+.stTabs [data-baseweb="tab"] {{
+    border-radius: 8px 8px 0 0;
 }}
 
 /* Compact app header */
@@ -281,6 +289,12 @@ section[data-testid="stSidebar"] {{
     border-radius: 12px !important;
     border: 1px solid {BORDER} !important;
     background: {SURFACE} !important;
+    min-height: 3.5rem !important;
+}}
+
+[data-testid="stTextArea"] textarea {{
+    min-height: 10rem !important;
+    line-height: 1.5 !important;
 }}
 
 /* Expander cards on results page */

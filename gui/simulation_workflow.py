@@ -9,6 +9,21 @@ import streamlit as st
 
 from gui.analysis import perform_msd_analysis, perform_rdf_analysis, perform_thermodynamic_analysis
 
+_FORCE_FIELD_LABELS = {
+    "tersoff": "tersoff", "eam": "eam", "reaxff": "reaxff", "meam": "meam",
+    "lennard-jones": "lj", "lennard jones": "lj", "lj": "lj", "emt": "emt",
+    "mace": "mace", "chgnet": "chgnet", "m3gnet": "m3gnet",
+    "opls": "opls", "gaff": "gaff", "openff": "openff", "auto": "auto",
+}
+
+
+def _force_field_kind(label) -> str:
+    """Map a human force-field label to a registered potential kind."""
+    if not label:
+        return "auto"
+    return _FORCE_FIELD_LABELS.get(str(label).strip().lower(), "auto")
+
+
 def is_simulation_request(prompt: str) -> bool:
     """Check if the prompt is a simulation request."""
     simulation_keywords = [
@@ -18,50 +33,35 @@ def is_simulation_request(prompt: str) -> bool:
     return any(keyword in prompt.lower() for keyword in simulation_keywords)
 
 def parse_initial_simulation_params(prompt: str) -> dict:
-    """Parse initial simulation parameters from natural language."""
-    import re
+    """Parse initial simulation parameters via the shared, non-hardcoded extractor.
+
+    Uses the deterministic spec extractor rather than brittle substring matching
+    (the old code matched 'si' inside many words and silently guessed). If no
+    material can be resolved, ``material`` is returned empty so the workflow asks
+    the user instead of guessing.
+    """
     from materials_ai_agent.core.config import Config
-    from materials_ai_agent.core.materials_database import MaterialsDatabase
-    
+    from materials_ai_agent.spec.extractor import extract_spec
+
     config = Config.from_env()
-    materials_db = MaterialsDatabase()
-    
-    # Extract material
-    material = ""  # Will be set by user
-    prompt_lower = prompt.lower()
-    
-    # Search through materials database
-    for formula, props in materials_db.get_all_materials().items():
-        if (formula.lower() in prompt_lower or 
-            props.description.lower() in prompt_lower or
-            any(alias in prompt_lower for alias in [formula.lower(), props.formula.lower()])):
-            material = formula
-            break
-    
-    # Fallback to simple keyword matching
-    if not material:
-        if "h2o" in prompt_lower or "water" in prompt_lower:
-            material = "H2O"
-        elif "silicon" in prompt_lower or "si" in prompt_lower:
-            material = "Si"
-        elif "aluminum" in prompt_lower or "al" in prompt_lower:
-            material = "Al"
-        elif "copper" in prompt_lower or "cu" in prompt_lower:
-            material = "Cu"
-        elif "iron" in prompt_lower or "fe" in prompt_lower:
-            material = "Fe"
-    
-    # Extract temperature
-    temperature = config.default_temperature
-    temp_match = re.search(r'(\d+)\s*k', prompt_lower)
-    if temp_match:
-        temperature = float(temp_match.group(1))
-        # Ensure temperature is within limits
-        temperature = max(config.min_temperature, min(temperature, config.max_temperature))
-    
+    try:
+        spec = extract_spec(prompt, config)
+    except Exception:
+        return {"material": "", "temperature": config.default_temperature}
+
+    material = spec.system.material or spec.system.smiles or spec.system.mp_material_id or ""
+    if material in {"unresolved", "custom", "user", "uploaded"}:
+        material = ""
+    temperature = max(
+        config.min_temperature, min(spec.ensemble.temperature, config.max_temperature)
+    )
     return {
         "material": material,
-        "temperature": temperature
+        "temperature": temperature,
+        "ensemble": spec.ensemble.name,
+        "protocol": spec.protocol.name,
+        "force_field": spec.potential.kind,
+        "engine": spec.engine,
     }
 
 def start_interactive_simulation_workflow(prompt: str):
@@ -658,10 +658,12 @@ def run_simulation_with_progress():
                 "material": workflow["material"],
                 "temperature": workflow["temperature"],
                 "n_steps": workflow["n_steps"],
-                "force_field": workflow["force_field"],
+                "force_field": _force_field_kind(workflow.get("force_field")),
                 "ensemble": workflow.get("ensemble"),
                 "thermostat": workflow.get("thermostat"),
                 "timestep": workflow.get("timestep"),
+                "engine": workflow.get("engine"),
+                "protocol": workflow.get("protocol"),
                 "output_frequency": 100,
                 "structure_source": normalize_structure_source(
                     workflow.get("structure_source", "generate")
@@ -682,8 +684,10 @@ def run_simulation_with_progress():
                     f"Frames written: {result.get('n_frames')}\n"
                     f"Output files: {result['output_files']}"
                 )
+            elif result.get("needs_clarification"):
+                response = f"ℹ️ I need more information before running: {result.get('error')}"
             else:
-                response = f"❌ Simulation failed: {result['error']}"
+                response = f"❌ Simulation failed: {result.get('error')}"
 
             status_text.text("✅ Simulation completed!")
             progress_bar.progress(100)

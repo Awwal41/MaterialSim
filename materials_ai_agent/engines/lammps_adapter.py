@@ -1,0 +1,236 @@
+"""LAMMPS engine adapter: generic input generation + output normalization.
+
+Builds a complete ``in.lammps`` from the resolved potential and protocol (no
+material or force field is hardcoded), runs it via the configured runner, and
+translates LAMMPS output back into the shared ``output.log`` / ``trajectory.xyz``
+contract used by the analysis modules.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+from pathlib import Path
+from typing import List, Optional
+
+from .base import EngineAdapter, EngineCapabilities, EngineResult, ResolvedJob
+
+logger = logging.getLogger(__name__)
+
+THERMO_HEADER = "Step Temp PotEng KinEng TotEng Press Volume"
+
+
+def specorder(atoms) -> List[str]:
+    """Deterministic element ordering shared by the data file and pair_coeff."""
+    return sorted(set(atoms.get_chemical_symbols()))
+
+
+def _find_executable() -> Optional[str]:
+    for name in (os.getenv("LAMMPS_EXECUTABLE"), "lmp", "lammps", "lmp_serial", "lmp_mpi"):
+        if name and shutil.which(name):
+            return shutil.which(name)
+    return None
+
+
+class LAMMPSAdapter(EngineAdapter):
+    name = "lammps"
+
+    def capabilities(self) -> EngineCapabilities:
+        exe = _find_executable()
+        return EngineCapabilities(
+            name="lammps",
+            available=exe is not None,
+            ensembles={"NVE", "NVT", "NPT"},
+            thermostats={"nose-hoover", "berendsen", "langevin", "none", "auto"},
+            barostats={"nose-hoover", "berendsen", "auto"},
+            protocols={"equilibrium", "nemd", "msst", "deformation"},
+            potential_kinds={"eam", "tersoff", "meam", "reaxff", "lj"},
+            notes="" if exe else "LAMMPS executable not found on PATH (set LAMMPS_EXECUTABLE).",
+        )
+
+    # ------------------------------------------------------------------
+    def run(self, job: ResolvedJob) -> EngineResult:
+        exe = _find_executable()
+        if exe is None:
+            return EngineResult(
+                success=False, engine=self.name, workdir=str(job.workdir),
+                error="LAMMPS executable not found. Install LAMMPS or set LAMMPS_EXECUTABLE.",
+            )
+        try:
+            pot = job.potential.lammps_potential(job)
+        except Exception as exc:  # noqa: BLE001
+            return EngineResult(
+                success=False, engine=self.name, workdir=str(job.workdir),
+                error=f"Potential '{job.potential.kind}' has no LAMMPS mapping: {exc}",
+            )
+
+        order = specorder(job.atoms)
+        self._write_data(job, order, pot)
+        script = self._build_script(job, order, pot)
+        (job.workdir / "in.lammps").write_text(script, encoding="utf-8")
+
+        res = job.runner.run([exe, "-in", "in.lammps"], job.workdir, log_file="lammps.log")
+        if res.returncode != 0:
+            return EngineResult(
+                success=False, engine=self.name, workdir=str(job.workdir),
+                error=f"LAMMPS exited with code {res.returncode}. See lammps.log.\n{res.stderr[:500]}",
+                warnings=job.warnings,
+            )
+
+        n_frames = self._normalize_outputs(job, order)
+        prod_start = None
+        if job.spec.protocol.name.lower() == "equilibrium":
+            from ..protocols.equilibrium import _eq_steps
+
+            prod_start = _eq_steps(job)
+
+        output_files = [str(f) for f in sorted(job.workdir.glob("*"))]
+        msg = (
+            f"Completed {job.spec.run.n_steps}-step {job.spec.ensemble.name} "
+            f"{job.spec.protocol.name} run of {job.material_label} "
+            f"({len(job.atoms)} atoms) using {job.potential.kind} (LAMMPS)."
+        )
+        return EngineResult(
+            success=True, engine=self.name, workdir=str(job.workdir), message=msg,
+            n_atoms=len(job.atoms), n_frames=n_frames, production_start_step=prod_start,
+            output_files=output_files, warnings=job.warnings,
+            extra={
+                "temperature": job.spec.ensemble.temperature,
+                "pressure": job.spec.ensemble.pressure,
+                "ensemble": job.spec.ensemble.name,
+                "n_steps": job.spec.run.n_steps,
+                "timestep": job.spec.run.timestep,
+                "force_field": job.potential.kind,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    def _write_data(self, job, order, pot) -> None:
+        from ase.io import write
+
+        write(
+            str(job.workdir / "structure.data"),
+            job.atoms,
+            format="lammps-data",
+            specorder=order,
+            atom_style=pot.atom_style,
+            masses=True,
+        )
+        # Keep an XYZ for first-frame RDF compatibility.
+        write(str(job.workdir / "structure.xyz"), job.atoms)
+
+    def _build_script(self, job, order, pot) -> str:
+        run = job.spec.run
+        freq = max(1, run.output_frequency)
+        lines: List[str] = [
+            "# Generated by MaterialSim LAMMPS adapter",
+            f"units {pot.units}",
+            "dimension 3",
+            "boundary p p p",
+            f"atom_style {pot.atom_style}",
+            "read_data structure.data",
+            "",
+            f"pair_style {pot.pair_style}",
+        ]
+        lines.extend(pot.pair_coeff)
+        for cmd in pot.extra_commands:
+            lines.append(cmd)
+        lines += [
+            "",
+            "neighbor 2.0 bin",
+            "neigh_modify delay 0 every 10 check yes",
+            "",
+            f"timestep {run.timestep}",
+            "thermo_style custom step temp pe ke etotal press vol",
+            f"thermo {freq}",
+            f"dump traj all custom {freq} dump.lammpstrj id type x y z fx fy fz",
+            "dump_modify traj sort id element " + " ".join(order),
+            f"variable L0 equal l{str(job.spec.protocol.params.get('axis', 'x')).lower()}",
+            "",
+        ]
+        try:
+            lines.extend(job.protocol.lammps_blocks(job))
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"Protocol '{job.spec.protocol.name}' is not available on LAMMPS: {exc}"
+            )
+        lines += ["", "write_data final_structure.data"]
+        return "\n".join(lines) + "\n"
+
+    # ------------------------------------------------------------------
+    def _normalize_outputs(self, job, order) -> int:
+        """Translate LAMMPS log + dump into output.log and trajectory.xyz."""
+        self._write_thermo_log(job)
+        return self._write_trajectory(job)
+
+    def _write_thermo_log(self, job) -> None:
+        log_src = job.workdir / "lammps.log"
+        out = job.workdir / "output.log"
+        header = ["MaterialSim LAMMPS MD",
+                  f"# target_temperature_K={job.spec.ensemble.temperature}",
+                  f"# target_pressure_atm={job.spec.ensemble.pressure}",
+                  THERMO_HEADER]
+        rows: List[str] = []
+        if log_src.exists():
+            text = log_src.read_text(encoding="utf-8", errors="ignore").splitlines()
+            capture = False
+            cols = None
+            for line in text:
+                s = line.split()
+                if line.strip().startswith("Step") and "Temp" in line:
+                    capture = True
+                    cols = line.split()
+                    continue
+                if capture:
+                    if len(s) == len(cols):
+                        try:
+                            vals = [float(x) for x in s]
+                        except ValueError:
+                            capture = False
+                            continue
+                        d = dict(zip([c.lower() for c in cols], vals))
+                        rows.append(
+                            f"{int(d.get('step', 0)):8d} {d.get('temp', 0):12.4f} "
+                            f"{d.get('pe', 0):14.6f} {d.get('ke', 0):14.6f} "
+                            f"{d.get('etotal', 0):14.6f} {d.get('press', 0):14.4f} "
+                            f"{d.get('vol', 0):14.4f}"
+                        )
+                    else:
+                        capture = False
+        out.write_text("\n".join(header + rows) + "\nTotal wall time: 0:00:00\n", encoding="utf-8")
+
+    def _write_trajectory(self, job) -> int:
+        dump = job.workdir / "dump.lammpstrj"
+        traj = job.workdir / "trajectory.xyz"
+        if not dump.exists():
+            return 0
+        try:
+            from ase.io import read
+
+            frames = read(str(dump), format="lammps-dump-text", index=":")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not parse LAMMPS dump: %s", exc)
+            return 0
+        if not isinstance(frames, list):
+            frames = [frames]
+        z_to_sym = {i + 1: s for i, s in enumerate(order)}
+        with open(traj, "w") as fh:
+            for k, atoms in enumerate(frames):
+                syms = atoms.get_chemical_symbols()
+                if set(syms) == {"X"} or all(s == "H" for s in syms):
+                    syms = [z_to_sym.get(int(t), s) for t, s in
+                            zip(atoms.get_array("numbers", copy=False), syms)] if False else syms
+                pos = atoms.get_positions()
+                fh.write(f"{len(atoms)}\n")
+                fh.write(f"Step={k} phase=production\n")
+                for s, p in zip(syms, pos):
+                    fh.write(f"{s} {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
+        # final structure xyz for convenience
+        try:
+            from ase.io import write
+
+            write(str(job.workdir / "final_structure.xyz"), frames[-1])
+        except Exception:  # noqa: BLE001
+            pass
+        return len(frames)

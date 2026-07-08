@@ -55,6 +55,22 @@ def synthesize_speech(
         return None
 
 
+def synthesize_to_b64(text: str, *, voice: str = DEFAULT_VOICE) -> Optional[str]:
+    """Synthesize speech and return base64-encoded MP3 for browser playback."""
+    import base64
+
+    path = synthesize_speech(text, voice=voice)
+    if path is None or not path.exists():
+        return None
+    try:
+        return base64.b64encode(path.read_bytes()).decode("ascii")
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _strip_markdown(text: str) -> str:
     """Remove common markdown formatting for TTS."""
     import re

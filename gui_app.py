@@ -23,9 +23,8 @@ st.set_page_config(
 
 from gui.components.header import render_header  # noqa: E402
 from gui.components.sidebar import render_sidebar  # noqa: E402
-from gui.pages.chat import render_chat_page  # noqa: E402
-from gui.pages.results import render_results_page  # noqa: E402
 from gui.pages.settings import render_settings_page  # noqa: E402
+from gui.pages.workspace import render_workspace_page  # noqa: E402
 from gui.state import initialize_agent, initialize_session_state  # noqa: E402
 from gui.styles import inject_styles  # noqa: E402
 
@@ -33,13 +32,12 @@ inject_styles()
 initialize_session_state()
 
 
-def page_chat() -> None:
+def page_workspace() -> None:
     render_header()
-    render_chat_page()
+    render_workspace_page()
 
 
 def page_jarvis() -> None:
-    render_header(show_tagline=False)
     if not initialize_agent():
         st.error("Agent not initialized. Configure API keys in Settings.")
         return
@@ -47,11 +45,6 @@ def page_jarvis() -> None:
     from gui.state import get_agent
 
     display_jarvis_mode(get_agent())
-
-
-def page_results() -> None:
-    render_header()
-    render_results_page()
 
 
 def page_settings() -> None:
@@ -65,9 +58,8 @@ def main() -> None:
     nav = st.navigation(
         {
             "Workspace": [
-                st.Page(page_chat, title="Chat", icon=icons.NAV_CHAT, default=True),
+                st.Page(page_workspace, title="Workspace", icon=icons.NAV_RESULTS, default=True),
                 st.Page(page_jarvis, title="Voice Agent", icon=icons.NAV_VOICE),
-                st.Page(page_results, title="Results", icon=icons.NAV_RESULTS),
             ],
             "System": [
                 st.Page(page_settings, title="Settings", icon=icons.NAV_SETTINGS),

@@ -4,6 +4,10 @@
 streamlit>=1.37.0
 plotly>=5.17.0
 
+# Interactive 3D structure / trajectory viewer (workspace)
+py3Dmol>=2.0.4
+stmol>=0.0.9
+
 # JARVIS voice interface
 edge-tts>=6.1.0
 SpeechRecognition>=3.10.0

@@ -122,11 +122,14 @@ class TestSimulationEngine:
     def test_real_simulation_and_output(self):
         from materials_ai_agent.simple_simulation import run_simple_simulation
 
+        # force_field="auto" resolves to a runnable potential (EMT for Cu).
+        # Requesting a LAMMPS-only potential like "eam" without LAMMPS installed
+        # now fails loudly by design rather than silently downgrading.
         result = run_simple_simulation(
             material="Cu",
             temperature=300,
             n_steps=500,
-            force_field="eam",
+            force_field="auto",
             ensemble="NVT",
             output_frequency=100,
         )
@@ -141,7 +144,7 @@ class TestSimulationEngine:
         from materials_ai_agent.simple_simulation import run_simple_simulation
 
         result = run_simple_simulation(
-            material="Cu", temperature=100, n_steps=200, force_field="eam"
+            material="Cu", temperature=100, n_steps=200, force_field="auto"
         )
         rdf = compute_rdf(Path(result["simulation_directory"]))
         assert rdf["success"] is True

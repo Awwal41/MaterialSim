@@ -1,22 +1,53 @@
 # MaterialSim AI Agent - Optional Extras
 # Install with: pip install -r requirements-optional.txt
 #
-# These enable the optional Database and ML tools. They are heavy and are not
-# required for running MD simulations or analysis.
+# These unlock the pluggable engines, potentials, structure builders, database,
+# and ML tools. None are required for the default ASE engine with EMT/LJ, but
+# each expands what the platform can simulate. Install only what you need.
 
-# Database integration (Materials Project, structure matching)
+# --- Database integration (Materials Project, structure matching) ---
 pymatgen>=2023.8.10
 mp-api>=0.33.0
 
-# Machine learning tools
-scikit-learn>=1.3.2
-# torch is optional and platform-specific; install the build that matches your
-# system from https://pytorch.org/get-started/locally/ if you need neural nets.
-# torch>=2.1.0
+# --- Structure & topology building ---
+# RDKit enables molecules/polymers from SMILES (MoleculeBuilder, PolymerBuilder).
+rdkit>=2023.9.1
+# packmol (for packing solvent/molecular boxes) is a standalone binary:
+#   conda install -c conda-forge packmol   (or build from source)
 
-# Extra visualization backends
+# --- Machine-learned interatomic potentials (universal, "any chemistry") ---
+# These require PyTorch. Install the build matching your platform/CUDA from
+# https://pytorch.org/get-started/locally/  (CPU wheels shown as a default).
+torch>=2.1.0
+# MACE-MP foundation model:
+mace-torch>=0.3.6
+# CHGNet universal potential:
+chgnet>=0.3.0
+# M3GNet via MatGL (also needs dgl, which is platform-specific):
+matgl>=1.1.0
+# dgl>=2.1.0   # install the wheel matching your torch/CUDA from https://www.dgl.ai
+
+# --- OpenMM engine + all-atom bonded force fields (OPLS/GAFF/OpenFF) ---
+# Best installed via conda-forge: conda install -c conda-forge openmm
+openmm>=8.1.0
+openmmforcefields>=0.12.0
+openff-toolkit>=0.15.0
+
+# --- LAMMPS engine (classical EAM/Tersoff/MEAM/ReaxFF, NEMD, MSST, deformation) ---
+# LAMMPS is a compiled MD code, not a pip package. Install it and expose the
+# executable, then set LAMMPS_EXECUTABLE (e.g. 'lmp'):
+#   conda install -c conda-forge lammps
+#   # or build from https://docs.lammps.org/Install.html
+# Optional Python bindings (for in-process use): the conda 'lammps' package
+# ships the 'lammps' Python module.
+# Provide classical potential files in ./potentials or set MATERIALSIM_POTENTIALS_DIR.
+
+# --- Machine learning tools (property prediction) ---
+scikit-learn>=1.3.2
+
+# --- Extra visualization backends ---
 seaborn>=0.12.2
 plotly>=5.17.0
 
-# Data storage
+# --- Data storage ---
 h5py>=3.9.0

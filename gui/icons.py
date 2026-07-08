@@ -15,6 +15,9 @@ NAV_VOICE = ":material/graphic_eq:"
 NAV_RESULTS = ":material/insert_chart:"
 NAV_SETTINGS = ":material/settings:"
 
+# Alias used across chat/sidebar surfaces
+CHAT = NAV_CHAT
+
 # Chat avatars
 AVATAR_USER = ":material/account_circle:"
 AVATAR_AGENT = ":material/auto_awesome:"
