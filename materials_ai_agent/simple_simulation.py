@@ -1,363 +1,354 @@
-"""Simple simulation functions that bypass Pydantic issues."""
+"""molecular dynamics engine built on ASE.
 
-import os
-import subprocess
-import tempfile
+This module runs molecular dynamics simulations using ASE's built-in
+integrators and interatomic potentials (EMT for supported metals/light elements,
+element-tuned Lennard-Jones as a fallback). It performs energy minimization,
+an equilibration phase, and a production phase, then writes trajectory and
+thermodynamic output files plus a ``meta.json`` quality manifest.
+"""
+
+import json
+import logging
 from pathlib import Path
-from typing import Dict, Any
-from ase import Atoms
-from ase.build import bulk
-from ase.io import write
+from typing import Any, Dict, Optional
+
 import numpy as np
+from ase import Atoms, units
+from ase.build import bulk, molecule
+from ase.io import write
+from ase.md.langevin import Langevin
+from ase.md.nvtberendsen import NVTBerendsen
+from ase.md.velocitydistribution import Stationary, ZeroRotation, thermalize_momenta
+from ase.md.verlet import VelocityVerlet
+from ase.optimize import FIRE
+
+from .md.potentials import (
+    recommended_equilibration_fraction,
+    recommended_timestep_ps,
+    select_calculator,
+)
+from .simulation_quality import assess_simulation_quality
+
+logger = logging.getLogger(__name__)
 
 
 def run_simple_simulation(
     material: str,
-    temperature: float = None,
-    n_steps: int = None,
-    force_field: str = None
+    temperature: Optional[float] = None,
+    n_steps: Optional[int] = None,
+    force_field: Optional[str] = None,
+    ensemble: Optional[str] = None,
+    thermostat: Optional[str] = None,
+    timestep: Optional[float] = None,
+    output_frequency: Optional[int] = None,
+    **_ignored: Any,
 ) -> Dict[str, Any]:
-    """Run a simple molecular dynamics simulation.
-    
-    Args:
-        material: Material formula (e.g., 'Si', 'Al2O3', 'H2O')
-        temperature: Temperature in K (uses config default if None)
-        n_steps: Number of simulation steps (uses config default if None)
-        force_field: Force field to use (uses config default if None)
-        
-    Returns:
-        Dictionary containing simulation results
-    """
+    """Run a real molecular dynamics simulation with equilibration + production."""
     try:
-        # Load configuration and materials database
         from .core.config import Config
         from .core.materials_database import MaterialsDatabase
-        
+
         config = Config.from_env()
         materials_db = MaterialsDatabase()
-        
-        # Use defaults from config if not provided
-        if temperature is None:
-            temperature = config.default_temperature
-        if n_steps is None:
-            n_steps = config.default_n_steps
-        if force_field is None:
-            force_field = config.default_force_field
-        
-        # Create simulation directory
+
+        temperature = float(temperature if temperature is not None else config.default_temperature)
+        n_steps = int(n_steps if n_steps is not None else config.default_n_steps)
+        force_field = force_field or config.default_force_field
+        ensemble = (ensemble or config.default_ensemble).upper()
+        thermostat = thermostat or config.default_thermostat
+        output_frequency = int(output_frequency or 100)
+        output_frequency = max(1, min(output_frequency, max(1, n_steps)))
+
         sim_dir = Path("simulations") / f"{material}_{temperature}K_{n_steps}steps"
         sim_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Get material properties from database
+
         material_props = materials_db.get_material(material)
-        if material_props:
-            # Use database parameters
-            atoms = create_structure_from_properties(material, material_props)
+        if material_props is not None:
+            atoms = _build_structure(material, material_props)
         else:
-            # Fallback to simple structure generation
-            atoms = create_simple_structure(material)
-        
-        # Write structure file
-        structure_file = sim_dir / "structure.xyz"
-        write(str(structure_file), atoms)
-        
-        # Create LAMMPS input file
-        input_file = sim_dir / "in.lammps"
-        create_lammps_input(input_file, material, temperature, n_steps, force_field)
-        
-        # Run LAMMPS simulation
-        output_file = sim_dir / "output.log"
-        run_lammps_simulation(input_file, output_file)
-        
-        # Check if simulation completed
-        if output_file.exists() and "Total wall time" in output_file.read_text():
-            return {
-                "success": True,
-                "material": material,
-                "temperature": temperature,
-                "n_steps": n_steps,
-                "force_field": force_field,
-                "simulation_directory": str(sim_dir),
-                "output_files": [str(f) for f in sim_dir.glob("*")],
-                "simulation_time": "completed",
-                "status": "completed",
-                "message": f"Successfully completed {n_steps} step MD simulation of {material} at {temperature}K using {force_field} potential"
-            }
-        else:
-            return {
-                "success": False,
-                "error": "Simulation did not complete successfully"
-            }
-            
-    except Exception as e:
+            atoms = _build_fallback_structure(material)
+
+        calculator, used_force_field, potential_warnings = select_calculator(
+            atoms, force_field, material
+        )
+
+        if timestep is None and material_props is not None:
+            timestep = material_props.recommended_timestep
+        if timestep is None:
+            timestep = recommended_timestep_ps(material, used_force_field)
+
+        atoms.calc = calculator
+        write(str(sim_dir / "structure.xyz"), atoms)
+
+        n_eq = max(
+            200,
+            int(n_steps * recommended_equilibration_fraction(used_force_field, material)),
+        )
+        n_eq = min(n_eq, max(1, n_steps - 100))
+        n_prod = n_steps - n_eq
+
+        n_frames, production_start_step = _run_md(
+            atoms=atoms,
+            sim_dir=sim_dir,
+            temperature=temperature,
+            n_equilibration_steps=n_eq,
+            n_production_steps=n_prod,
+            ensemble=ensemble,
+            thermostat=thermostat,
+            timestep_ps=timestep,
+            output_frequency=output_frequency,
+        )
+
+        meta = {
+            "material": material,
+            "target_temperature": temperature,
+            "ensemble": ensemble,
+            "thermostat": thermostat,
+            "force_field": used_force_field,
+            "requested_force_field": force_field,
+            "timestep_ps": timestep,
+            "n_equilibration_steps": n_eq,
+            "n_production_steps": n_prod,
+            "production_start_step": production_start_step,
+            "warnings": potential_warnings,
+        }
+        (sim_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+        quality = assess_simulation_quality(sim_dir, temperature)
+        output_files = [str(f) for f in sorted(sim_dir.glob("*"))]
+
+        message = (
+            f"Completed {n_steps}-step {ensemble} MD simulation of {material} "
+            f"({len(atoms)} atoms) at {temperature:g} K using the {used_force_field} potential."
+        )
+        if not quality.get("converged"):
+            message += " Warning: the run did not fully equilibrate — see quality report."
+
         return {
-            "success": False,
-            "error": f"Simulation failed: {str(e)}"
+            "success": True,
+            "material": material,
+            "temperature": temperature,
+            "n_steps": n_steps,
+            "force_field": used_force_field,
+            "ensemble": ensemble,
+            "thermostat": thermostat,
+            "timestep": timestep,
+            "n_atoms": len(atoms),
+            "n_frames": n_frames,
+            "simulation_directory": str(sim_dir),
+            "output_files": output_files,
+            "status": "completed",
+            "message": message,
+            "warnings": potential_warnings,
+            "quality": quality,
         }
 
-
-def create_lammps_input(input_file: Path, material: str, temperature: float, n_steps: int, force_field: str):
-    """Create LAMMPS input file."""
-    
-    if force_field == "tersoff":
-        pair_style = "tersoff"
-        pair_coeff = f"* * Si.tersoff Si"
-    elif force_field == "lj":
-        pair_style = "lj/cut 2.5"
-        pair_coeff = f"* * 1.0 1.0 2.5"
-    else:
-        pair_style = "tersoff"
-        pair_coeff = f"* * Si.tersoff Si"
-    
-    input_content = f"""# LAMMPS input file for {material} at {temperature}K
-units metal
-dimension 3
-boundary p p p
-atom_style atomic
-
-# Read structure
-read_data structure.data
-
-# Define potential
-pair_style {pair_style}
-pair_coeff {pair_coeff}
-
-# Define settings
-compute new all temp
-velocity all create {temperature} 12345 mom yes rot yes dist gaussian
-
-# Setup trajectory output
-variable iofrq equal 2
-dump 1 all custom ${{iofrq}} trajectory.xyz element xu yu zu fx fy fz
-dump_modify 1 sort id
-
-# Run simulation
-fix 1 all nvt temp {temperature} {temperature} 0.1
-thermo 100
-run {n_steps}
-
-# Output final structure
-write_data final_structure.data
-"""
-    
-    input_file.write_text(input_content)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Simulation failed")
+        return {"success": False, "error": f"Simulation failed: {exc}"}
 
 
-def run_lammps_simulation(input_file: Path, output_file: Path):
-    """Run LAMMPS simulation."""
+def _run_md(
+    atoms: Atoms,
+    sim_dir: Path,
+    temperature: float,
+    n_equilibration_steps: int,
+    n_production_steps: int,
+    ensemble: str,
+    thermostat: str,
+    timestep_ps: float,
+    output_frequency: int,
+) -> tuple[int, Optional[int]]:
+    """Minimize, equilibrate, then run production MD."""
+    _minimize_structure(atoms)
+
+    dt = timestep_ps * 1000.0 * units.fs
+    trajectory_file = sim_dir / "trajectory.xyz"
+    log_file = sim_dir / "output.log"
+    symbols = atoms.get_chemical_symbols()
+    frame_counter = {"n": 0}
+    production_start_step: Optional[int] = None
+
+    with open(trajectory_file, "w") as traj, open(log_file, "w") as log:
+        log.write(f"LAMMPS-style MD log generated by MaterialSim (ASE {ensemble})\n")
+        log.write(f"# target_temperature_K={temperature}\n")
+        log.write("Step Temp PotEng KinEng TotEng Press Volume\n")
+
+        def _record(mark_production: bool = True) -> None:
+            nonlocal production_start_step
+            step = dyn.nsteps
+            if mark_production and production_start_step is None and phase["name"] == "production":
+                production_start_step = step
+                log.write(f"# production_start step={step}\n")
+
+            temp = atoms.get_temperature()
+            pe = atoms.get_potential_energy()
+            ke = atoms.get_kinetic_energy()
+            press = _pressure_bar(atoms)
+            vol = atoms.get_volume() if atoms.cell.rank == 3 else 0.0
+            log.write(
+                f"{step:8d} {temp:12.4f} {pe:14.6f} {ke:14.6f} "
+                f"{pe + ke:14.6f} {press:14.4f} {vol:14.4f}\n"
+            )
+            log.flush()
+
+            if mark_production:
+                forces = atoms.get_forces()
+                positions = atoms.get_positions()
+                traj.write(f"{len(atoms)}\n")
+                traj.write(f"Step={step} Temp={temp:.4f} phase={phase['name']}\n")
+                for sym, pos, frc in zip(symbols, positions, forces):
+                    traj.write(
+                        f"{sym} {pos[0]:.6f} {pos[1]:.6f} {pos[2]:.6f} "
+                        f"{frc[0]:.6f} {frc[1]:.6f} {frc[2]:.6f}\n"
+                    )
+                traj.flush()
+                frame_counter["n"] += 1
+
+        phase = {"name": "equilibration"}
+
+        # --- Equilibration: strong thermostat coupling ---
+        thermalize_momenta(atoms, temperature_K=temperature)
+        _zero_drift(atoms)
+        dyn = _make_integrator(
+            atoms, ensemble, thermostat, dt, temperature, friction=0.08
+        )
+        dyn.attach(lambda: _record(mark_production=False), interval=output_frequency)
+        _record(mark_production=False)
+        if n_equilibration_steps > 0:
+            dyn.run(n_equilibration_steps)
+
+        # --- Production ---
+        phase["name"] = "production"
+        thermalize_momenta(atoms, temperature_K=temperature)
+        _zero_drift(atoms)
+        dyn = _make_integrator(
+            atoms, ensemble, thermostat, dt, temperature, friction=0.03
+        )
+        dyn.attach(lambda: _record(mark_production=True), interval=output_frequency)
+        _record(mark_production=True)
+        if n_production_steps > 0:
+            dyn.run(n_production_steps)
+
+        if production_start_step is not None:
+            log.write(f"# production_start_step={production_start_step}\n")
+        log.write("Total wall time: 0:00:00\n")
+
+    write(str(sim_dir / "final_structure.xyz"), atoms)
+    return frame_counter["n"], production_start_step
+
+
+def _minimize_structure(atoms: Atoms, steps: int = 150) -> None:
+    """Relax atomic positions before dynamics to reduce initial energy spikes."""
     try:
-        # Try to run LAMMPS
-        cmd = ["lmp", "-in", str(input_file)]
-        with open(output_file, "w") as f:
-            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, text=True, cwd=input_file.parent)
-        
-        if result.returncode != 0:
-            # If LAMMPS not found, create a mock simulation
-            create_mock_simulation(input_file, output_file)
-            
-    except FileNotFoundError:
-        # LAMMPS not found, create a mock simulation
-        create_mock_simulation(input_file, output_file)
+        optimizer = FIRE(atoms, logfile=None)
+        optimizer.run(fmax=0.08, steps=steps)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Energy minimization skipped: %s", exc)
 
 
-def create_mock_simulation(input_file: Path, output_file: Path):
-    """Create a mock simulation output for testing."""
-    # Read the input file to get the actual temperature and parameters
+def _zero_drift(atoms: Atoms) -> None:
+    Stationary(atoms)
+    if not atoms.pbc.all():
+        ZeroRotation(atoms)
+
+
+def _make_integrator(
+    atoms: Atoms,
+    ensemble: str,
+    thermostat: str,
+    dt: float,
+    temperature: float,
+    friction: float = 0.03,
+):
+    """Choose an ASE integrator based on ensemble and thermostat."""
+    thermostat_l = (thermostat or "").lower()
+
+    if ensemble == "NVE":
+        return VelocityVerlet(atoms, timestep=dt)
+
+    if "berendsen" in thermostat_l:
+        return NVTBerendsen(
+            atoms, timestep=dt, temperature_K=temperature, taut=max(50 * dt, 25.0)
+        )
+
+    return Langevin(
+        atoms,
+        timestep=dt,
+        temperature_K=temperature,
+        friction=friction,
+        fixcm=False,
+    )
+
+
+def _pressure_bar(atoms: Atoms) -> float:
+    """Return scalar pressure in bar, or 0.0 if stress is unavailable."""
     try:
-        input_content = input_file.read_text()
-        import re
-        
-        # Extract temperature
-        temp_match = re.search(r'velocity all create (\d+(?:\.\d+)?)', input_content)
-        if temp_match:
-            temperature = float(temp_match.group(1))
+        if not atoms.pbc.all() or atoms.cell.rank != 3:
+            return 0.0
+        stress = atoms.get_stress(voigt=True)
+        pressure_eva3 = -(stress[0] + stress[1] + stress[2]) / 3.0
+        return float(pressure_eva3 / units.bar)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _build_structure(material: str, props) -> Atoms:
+    """Build a periodic supercell from database properties."""
+    lattice = props.lattice_type
+    a = props.lattice_parameter
+
+    if lattice == "molecular":
+        return _molecular_box(material)
+
+    try:
+        if lattice == "diamond":
+            cell = bulk(material, "diamond", a=a)
+        elif lattice == "fcc":
+            cell = bulk(material, "fcc", a=a)
+        elif lattice == "bcc":
+            cell = bulk(material, "bcc", a=a)
+        elif lattice == "hcp":
+            cell = bulk(material, "hcp", a=a)
+        elif lattice == "zincblende":
+            cell = bulk(material, "zincblende", a=a)
         else:
-            temperature = 300.0  # Default fallback
-            
-        # Extract number of steps
-        steps_match = re.search(r'run (\d+)', input_content)
-        if steps_match:
-            n_steps = int(steps_match.group(1))
-        else:
-            n_steps = 10000  # Default fallback
-            
-        # Extract output frequency
-        freq_match = re.search(r'variable iofrq equal (\d+)', input_content)
-        if freq_match:
-            output_freq = int(freq_match.group(1))
-        else:
-            output_freq = 100  # Default fallback
-            
-    except:
-        temperature = 300.0
-        n_steps = 10000
-        output_freq = 100
-    
-    mock_output = f"""LAMMPS (15 Apr 2024)
-Running on 1 processor of 1 node
-Reading data file: structure.data
-  orthogonal box = (0 0 0) to (10.86 10.86 10.86)
-  1 by 1 by 1 MPI processor grid
-  reading atoms ...
-  8 atoms
-  read_data CPU = 0.000 seconds
-Replicating atoms ...
-  orthogonal box = (0 0 0) to (10.86 10.86 10.86)
-  1 by 1 by 1 MPI processor grid
-  WARNING: Replicating orthogonal box but not checking for overlapping atoms
-  replicated 8 atoms
-  replicate CPU = 0.000 seconds
-Neighbor list info ...
-  update every 1 steps, delay 10 steps, check yes
-  max neighbors/atom: 2000, page size: 100000
-  master list distance cutoff = 2.8
-  ghost atom cutoff = 2.8
-  binsize = 0.7, bins = 16 16 16
-  1 neighbor lists, perpetual/occasional/extra = 1 0 0
-  (1) pair tersoff, perpetual
-  attributes: full, newton on
-  pair build: full/bin/atomonly
-  stencil: full
-  bin: standard
-  setting up Verlet run ...
-  Unit style    : metal
-  Current step  : 0
-  Time step     : 0.001
-Per MPI rank memory allocation (min/avg/max) = 2.0 | 2.0 | 2.0 Mbytes
-Step Temp PotEng KinEng TotEng Press Volume
-       0          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     100          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     200          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     300          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     400          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     500          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     600          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     700          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     800          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-     900          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-    1000          {temperature:.1f}   -31.2075    0.0375  -31.17    1234.56   1280.0
-Loop time of 0.001234 on 1 procs for 1000 steps with 8 atoms
-Performance: 810.526 ns/day, 0.030 hours/ns, 810.526 timesteps/s
-100.0% CPU use with 1 MPI tasks x 1 OpenMP threads
-MPI task timing breakdown:
-Section |  min time  |  avg time  |  max time  |%varavg| %total
----------------------------------------------------------------
-Pair    | 0.000123  | 0.000123  | 0.000123  |   0.0 | 10.0
-Neigh   | 0.000456  | 0.000456  | 0.000456  |   0.0 | 37.0
-Comm    | 0.000123  | 0.000123  | 0.000123  |   0.0 | 10.0
-Output  | 0.000123  | 0.000123  | 0.000123  |   0.0 | 10.0
-Modify  | 0.000123  | 0.000123  | 0.000123  |   0.0 | 10.0
-Other   |            | 0.000123  |            |       | 10.0
+            cell = bulk(material, "sc", a=a)
+    except Exception:
+        cell = bulk(material, "sc", a=a or 3.0)
 
-Nlocal:    8 ave 8 max 8 min
-Histogram: 1 0 0 0 0 0 0 0 0 0
-Nghost:    0 ave 0 max 0 min
-Histogram: 1 0 0 0 0 0 0 0 0 0
-Neighs:    0 ave 0 max 0 min
-Histogram: 1 0 0 0 0 0 0 0 0 0
-
-Total # of neighbors = 0
-Ave neighs/atom = 0
-Neighbor list builds = 1
-Dangerous builds = 0
-
-Total wall time: 0:00:00
-"""
-    
-    output_file.write_text(mock_output)
-    
-    # Also create a mock trajectory file
-    trajectory_file = input_file.parent / "trajectory.xyz"
-    create_mock_trajectory(trajectory_file, temperature, n_steps, output_freq)
+    return _make_supercell(cell)
 
 
-def create_mock_trajectory(trajectory_file: Path, temperature: float, n_steps: int, output_freq: int):
-    """Create a mock trajectory file for testing."""
-    import numpy as np
-    
-    # Create a simple 8-atom Si structure
-    n_atoms = 8
-    lattice_param = 5.43
-    
-    # Initial positions (simple cubic)
-    positions = np.array([
-        [0.0, 0.0, 0.0],
-        [lattice_param/2, lattice_param/2, 0.0],
-        [lattice_param/2, 0.0, lattice_param/2],
-        [0.0, lattice_param/2, lattice_param/2],
-        [lattice_param, 0.0, 0.0],
-        [lattice_param, lattice_param/2, lattice_param/2],
-        [lattice_param/2, lattice_param, 0.0],
-        [0.0, lattice_param, lattice_param/2]
-    ])
-    
-    # Generate trajectory data
-    trajectory_content = ""
-    timestep = 0
-    
-    while timestep <= n_steps:
-        if timestep % output_freq == 0:
-            # Add timestep header
-            trajectory_content += f"{n_atoms}\n"
-            trajectory_content += f"Lattice=\"5.43 0.0 0.0 0.0 5.43 0.0 0.0 0.0 5.43\" Properties=species:S:1:pos:R:3:force:R:3 Time={timestep}\n"
-            
-            # Add atomic positions with some random motion
-            for i, pos in enumerate(positions):
-                # Add small random displacement for trajectory effect
-                displacement = np.random.normal(0, 0.1, 3) * (timestep / n_steps)
-                current_pos = pos + displacement
-                
-                # Add some random force
-                force = np.random.normal(0, 0.5, 3)
-                
-                trajectory_content += f"Si {current_pos[0]:.6f} {current_pos[1]:.6f} {current_pos[2]:.6f} {force[0]:.6f} {force[1]:.6f} {force[2]:.6f}\n"
-        
-        timestep += output_freq
-    
-    trajectory_file.write_text(trajectory_content)
-
-
-def create_structure_from_properties(material: str, props) -> Atoms:
-    """Create atomic structure from material properties.
-    
-    Args:
-        material: Material formula
-        props: MaterialProperties object
-        
-    Returns:
-        ASE Atoms object
-    """
-    if props.lattice_type == "diamond":
-        return bulk(material, "diamond", a=props.lattice_parameter)
-    elif props.lattice_type == "fcc":
-        return bulk(material, "fcc", a=props.lattice_parameter)
-    elif props.lattice_type == "bcc":
-        return bulk(material, "bcc", a=props.lattice_parameter)
-    elif props.lattice_type == "hcp":
-        return bulk(material, "hcp", a=props.lattice_parameter)
-    elif props.lattice_type == "zincblende":
-        # For compound semiconductors like GaAs
-        return bulk(material, "zincblende", a=props.lattice_parameter)
-    elif props.lattice_type == "molecular":
-        # For molecular materials like H2O
-        return molecule(material)
-    else:
-        # Default: simple cubic
-        return bulk(material, "sc", a=props.lattice_parameter)
-
-
-def create_simple_structure(material: str) -> Atoms:
-    """Create a simple atomic structure as fallback.
-    
-    Args:
-        material: Material formula
-        
-    Returns:
-        ASE Atoms object
-    """
-    # Fallback structure generation for unknown materials
+def _build_fallback_structure(material: str) -> Atoms:
+    """Best-effort structure for materials not in the database."""
     if material.upper() == "H2O":
-        return molecule("H2O")
-    else:
-        # Default: simple cubic with reasonable lattice parameter
-        return bulk(material, "sc", a=3.0)
+        return _molecular_box("H2O")
+    try:
+        return _make_supercell(bulk(material, "fcc", a=3.6))
+    except Exception:
+        try:
+            return _molecular_box(material)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(
+                f"Could not build a structure for '{material}'. "
+                "Provide a known material or a structure file."
+            ) from exc
+
+
+def _make_supercell(cell: Atoms, target_atoms: int = 64) -> Atoms:
+    """Replicate a unit cell into a supercell with roughly target_atoms atoms."""
+    n_unit = max(1, len(cell))
+    reps = max(1, int(round((target_atoms / n_unit) ** (1.0 / 3.0))))
+    supercell = cell * (reps, reps, reps)
+    supercell.pbc = True
+    return supercell
+
+
+def _molecular_box(formula: str, box: float = 12.0) -> Atoms:
+    """Place a molecule in a cubic box."""
+    mol = molecule(formula)
+    mol.set_cell([box, box, box])
+    mol.center()
+    mol.pbc = False
+    return mol

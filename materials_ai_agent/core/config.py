@@ -4,7 +4,7 @@ import os
 from typing import Optional, Dict, Any
 from pathlib import Path
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Config(BaseModel):
@@ -54,11 +54,8 @@ class Config(BaseModel):
     model_name: str = Field("gpt-4", description="OpenAI model name")
     max_tokens: int = Field(4000, description="Maximum tokens for LLM responses")
     temperature: float = Field(0.1, description="LLM temperature")
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+
+    model_config = ConfigDict(extra="ignore")
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -97,6 +94,36 @@ class Config(BaseModel):
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
         )
     
+    @classmethod
+    def from_file(cls, path: str) -> "Config":
+        """Load configuration from a YAML or .env file.
+
+        Args:
+            path: Path to a ``.yaml``/``.yml`` or ``.env`` configuration file.
+
+        Returns:
+            A populated ``Config`` instance. Environment variables are still
+            applied first so that YAML values act as overrides/defaults.
+        """
+        file_path = Path(path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {path}")
+
+        if file_path.suffix.lower() in {".yaml", ".yml"}:
+            import yaml
+
+            with open(file_path, "r", encoding="utf-8") as fh:
+                data = yaml.safe_load(fh) or {}
+            base = cls.from_env().model_dump()
+            for key, value in data.items():
+                if key in base:
+                    base[key] = value
+            return cls(**base)
+
+        # Treat anything else as a dotenv file.
+        load_dotenv(file_path, override=True)
+        return cls.from_env()
+
     def create_directories(self) -> None:
         """Create necessary output directories."""
         self.simulation_output_dir.mkdir(parents=True, exist_ok=True)

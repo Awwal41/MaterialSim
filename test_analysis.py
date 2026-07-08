@@ -8,7 +8,7 @@ import os
 sys.path.append('.')
 
 
-from gui_app import perform_msd_analysis, perform_rdf_analysis, perform_thermodynamic_analysis
+from gui.analysis import perform_msd_analysis, perform_rdf_analysis, perform_thermodynamic_analysis
 
 def test_analysis_functions():
     """Test all analysis functions with the latest simulation data."""

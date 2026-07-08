@@ -114,19 +114,37 @@ Examples:
 def print_result(result: dict):
     """Print formatted result."""
     if result.get('success', False):
-        print("✓ Success!")
-        if 'result' in result:
-            print(result['result'])
-        elif 'analysis' in result:
-            print(result['analysis'])
-        elif 'predictions' in result:
-            print(result['predictions'])
-        elif 'results' in result:
-            print(result['results'])
+        print("Success!")
+        if 'message' in result:
+            print(result['message'])
+        if 'simulation_directory' in result:
+            print(f"Directory: {result['simulation_directory']}")
+        if 'rdf' in result or 'thermodynamics' in result:
+            _print_analysis(result)
+        for key in ('result', 'analysis', 'predictions', 'results'):
+            if key in result and not isinstance(result[key], dict):
+                print(result[key])
     else:
-        print("✗ Failed!")
+        print("Failed!")
         if 'error' in result:
             print(f"Error: {result['error']}")
+
+
+def _print_analysis(result: dict):
+    """Pretty-print an analysis result dictionary."""
+    thermo = result.get('thermodynamics', {})
+    if thermo.get('success'):
+        print(
+            f"Avg temperature: {thermo['avg_temperature']:.1f} K "
+            f"(+/- {thermo['std_temperature']:.1f})"
+        )
+        print(f"Avg pressure: {thermo['avg_pressure']:.1f} bar")
+    rdf = result.get('rdf', {})
+    if rdf.get('success') and rdf.get('first_peak'):
+        print(f"RDF first peak: {rdf['first_peak']:.2f} Angstrom")
+    msd = result.get('msd', {})
+    if msd.get('success'):
+        print(f"Diffusion coefficient: {msd['diffusion_coefficient']:.3e} A^2/frame")
 
 
 def run_interactive_mode(agent: MaterialsAgent):

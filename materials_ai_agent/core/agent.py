@@ -1,360 +1,316 @@
 """Main Materials AI Agent class."""
 
 import logging
-from typing import Dict, Any, List, Optional
-from pathlib import Path
-
-from langchain.agents import AgentExecutor, create_openai_tools_agent
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.schema import HumanMessage, AIMessage
+import re
+from typing import Any, Dict, List, Optional
 
 from .config import Config
 from .exceptions import MaterialsAgentError
-from ..tools import (
-    SimulationTool,
-    AnalysisTool,
-    DatabaseTool,
-    MLTool,
-    VisualizationTool,
-)
-from ..tools.simulation import create_simulation_tools
+from .materials_database import MaterialsDatabase
+from .model_router import ModelRouter
+
+logger = logging.getLogger(__name__)
 
 
 class MaterialsAgent:
-    """Main Materials AI Agent class."""
-    
+    """Autonomous agent for computational materials science.
+
+    Core capabilities (simulation and analysis) run deterministically against the MD engine and do not require an LLM. The optional conversational
+    ``chat`` interface uses an LLM with tool access when an API key is present.
+    A :class:`ModelRouter` selects the best model per task, optionally
+    researching benchmarks and papers online first.
+    """
+
     def __init__(self, config: Optional[Config] = None):
         """Initialize the Materials AI Agent.
-        
+
         Args:
             config: Configuration object. If None, loads from environment.
         """
         self.config = config or Config.from_env()
         self.config.create_directories()
-        
-        # Set up logging
-        logging.basicConfig(level=getattr(logging, self.config.log_level))
+
         self.logger = logging.getLogger(__name__)
-        
-        # Initialize tools
+        self.materials_db = MaterialsDatabase()
+        self.model_router = ModelRouter(default_model=self.config.model_name)
+
+        # Build the toolset (real, usable tools).
         self.tools = self._initialize_tools()
-        
-        # Initialize LLM
-        self.llm = ChatOpenAI(
-            model=self.config.model_name,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            openai_api_key=self.config.openai_api_key,
+
+        # The LLM/agent are optional: only needed for free-form chat.
+        self.llm = None
+        self.agent = None
+        self._current_model: Optional[str] = None
+        self._init_llm_agent()
+
+        self.logger.info(
+            "Materials AI Agent initialized with %d tool(s)", len(self.tools)
         )
-        
-        # Initialize memory
-        self.memory = ConversationBufferWindowMemory(
-            k=10,
-            memory_key="chat_history",
-            return_messages=True,
-        )
-        
-        # Create agent
-        self.agent = self._create_agent()
-        
-        self.logger.info("Materials AI Agent initialized successfully")
-    
+
     def _initialize_tools(self) -> List:
-        """Initialize all available tools."""
-        return []
-    
-    def _create_agent(self) -> AgentExecutor:
-        """Create the agent with tools and memory."""
-       
-        system_prompt = """You are a Materials AI Agent, an expert in computational materials science and molecular dynamics simulations.
+        """Initialize the tools the agent can call.
 
-Your capabilities include:
-1. Setting up and running molecular dynamics simulations using LAMMPS
-2. Analyzing simulation results to compute materials properties
-3. Querying materials databases for comparison and benchmarking
-4. Using machine learning models for property prediction
-5. Creating visualizations and reports
-
-You should:
-- Always provide detailed explanations of your actions
-- Suggest appropriate simulation parameters based on the material and property of interest
-- Interpret results in the context of materials science
-- Recommend follow-up simulations or experiments when appropriate
-- Use proper scientific terminology and units
-
-When asked to run simulations, you MUST use the available tools to actually execute the simulation, not just provide instructions.
-
-Available tools:
-- simulation: For setting up and running MD simulations
-- analysis: For computing materials properties from simulation data
-- database: For querying materials databases
-- ml: For ML-based property prediction
-- visualization: For creating plots and reports
-
-IMPORTANT: When a user asks you to run a simulation, you MUST use the simulation tool to actually execute it, not just provide instructions or code.
-"""
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-        
-        
-        try:
-            agent = create_openai_tools_agent(
-                llm=self.llm,
-                tools=self.tools,
-                prompt=prompt
-            )
-            
-            agent_executor = AgentExecutor(
-                agent=agent,
-                tools=self.tools,
-                memory=self.memory,
-                verbose=True,
-                handle_parsing_errors=True
-            )
-            
-            return agent_executor
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to create agent with tools: {e}. Falling back to simple LLM.")
-            
-            
-            from langchain.chains import LLMChain
-            chain = LLMChain(llm=self.llm, prompt=prompt)
-            
-           
-            class SimpleAgentExecutor:
-                def __init__(self, chain, memory):
-                    self.chain = chain
-                    self.memory = memory
-                
-                def invoke(self, inputs):
-                   
-                    chat_history = self.memory.chat_memory.messages
-                    
-                    
-                    formatted_input = {
-                        "input": inputs["input"],
-                        "chat_history": chat_history
-                    }
-                    
-                    
-                    response = self.chain.invoke(formatted_input)
-                    
-                    return {"output": response["text"]}
-            
-            agent_executor = SimpleAgentExecutor(chain, self.memory)
-            
-            return agent_executor
-    
-    def run_simulation(self, instruction: str) -> str:
-        """Run a simulation based on natural language instruction.
-        
-        Args:
-            instruction: Natural language description of the simulation to run
-            
-        Returns:
-            String response from the agent
+        Simulation and analysis tools are always available. Database and ML
+        tools are optional and only loaded when their dependencies are present.
         """
+        tools: List = []
         try:
-            self.logger.info(f"Running simulation: {instruction}")
-            
-            material, temperature, force_field, n_steps = self._parse_simulation_instruction(instruction)
-            
+            from ..tools.agent_tools import create_agent_tools
+
+            tools = create_agent_tools(self.config)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Failed to build agent tools: %s", exc)
+        return tools
+
+    def _init_llm_agent(self, model_name: Optional[str] = None) -> None:
+        """Create the LLM-backed conversational agent when possible."""
+        if not self.config.openai_api_key:
+            self.logger.warning(
+                "No OpenAI API key configured; conversational chat is disabled. "
+                "Simulation and analysis still work."
+            )
+            return
+
+        model = model_name or self.config.model_name
+        try:
+            from langchain_openai import ChatOpenAI
+            from langgraph.prebuilt import create_react_agent
+
+            self.llm = ChatOpenAI(
+                model=model,
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens,
+                api_key=self.config.openai_api_key,
+            )
+            self.agent = create_react_agent(
+                self.llm,
+                self.tools,
+                prompt=self._system_prompt(),
+            )
+            self._current_model = model
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Could not initialize LLM agent: %s", exc)
+            self.llm = None
+            self.agent = None
+
+    def reconfigure_llm(self, task_description: str) -> str:
+        """Pick the best model for *task_description* and re-init if needed.
+
+        Returns the model ID now in use.
+        """
+        rec = self.model_router.recommend(task_description, search_online=True)
+        if rec.model_id != self._current_model and rec.provider == "openai":
+            self.logger.info(
+                "Switching LLM: %s -> %s (%s)",
+                self._current_model,
+                rec.model_id,
+                rec.rationale,
+            )
+            self._init_llm_agent(rec.model_id)
+        return rec.model_id
+
+    @staticmethod
+    def _system_prompt() -> str:
+        return (
+            "You are the Material Sim Agent, an expert in computational "
+            "materials science and molecular dynamics. You can run MD simulations, "
+            "analyze their results, search literature, and recommend the best "
+            "approaches. When a user asks you to run a simulation, call the "
+            "simulation tool rather than only describing what to do. "
+            "Always check simulation quality: if temperature, pressure, or "
+            "equilibration warnings are present, explain clearly that the run "
+            "did not converge and suggest fixes (longer equilibration, smaller "
+            "timestep, or EMT-supported metals like Cu/Al instead of Si with LJ). "
+            "Never present unphysical averages from the equilibration phase as "
+            "final results. Explain results using correct scientific terminology "
+            "and units. Be concise when responding via voice."
+        )
+
+    def process_command(self, utterance: str):
+        """Process a voice or text command through the voice orchestrator."""
+        from ..voice.orchestrator import VoiceOrchestrator
+
+        return VoiceOrchestrator(self).process(utterance)
+
+    def research_best_model(self, task: str) -> Dict[str, Any]:
+        """Research online and return the best LLM recommendation for *task*."""
+        rec = self.model_router.recommend(task, search_online=True)
+        from .literature_search import research_task
+
+        research = research_task(task)
+        return {
+            "model_id": rec.model_id,
+            "provider": rec.provider,
+            "task_type": rec.task_type,
+            "rationale": rec.rationale,
+            "confidence": rec.confidence,
+            "sources": rec.sources,
+            "papers": research.get("papers", []),
+            "web_results": research.get("web_results", []),
+        }
+
+    # ------------------------------------------------------------------
+    # Core deterministic capabilities (no LLM required)
+    # ------------------------------------------------------------------
+    def run_simulation(self, instruction: str) -> Dict[str, Any]:
+        """Run a simulation from a natural-language instruction.
+
+        Args:
+            instruction: Natural-language description of the simulation.
+
+        Returns:
+            Dictionary with ``success`` and, on success, simulation details.
+        """
+        self.logger.info("Running simulation: %s", instruction)
+        try:
+            params = self._parse_simulation_instruction(instruction)
             from ..simple_simulation import run_simple_simulation
-            
-         
-            result = run_simple_simulation(
-                material=material,
-                temperature=temperature,
-                n_steps=n_steps,
-                force_field=force_field
-            )
-            
-            if result["success"]:
-                return f"✅ {result['message']}\n\nSimulation completed successfully!\nDirectory: {result['simulation_directory']}\nOutput files: {result['output_files']}"
-            else:
-                return f"❌ Simulation failed: {result['error']}"
-            
-        except Exception as e:
-            self.logger.error(f"Simulation failed: {str(e)}")
-            return f"Error: {str(e)}"
-    
-    def _parse_simulation_instruction(self, instruction: str) -> tuple:
-        """Parse simulation instruction to extract parameters.
-        
-        Args:
-            instruction: Natural language instruction
-            
-        Returns:
-            Tuple of (material, temperature, force_field, n_steps)
-        """
-        from .materials_database import MaterialsDatabase
-        
-        instruction_lower = instruction.lower()
-        materials_db = MaterialsDatabase()
-        
-        
+
+            return run_simple_simulation(**params)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Simulation failed")
+            return {"success": False, "error": str(exc)}
+
+    def _parse_simulation_instruction(self, instruction: str) -> Dict[str, Any]:
+        """Extract simulation parameters from a natural-language instruction."""
+        text = instruction.lower()
+
+        # Material: try the database first, then a small keyword map.
         material = None
-        for formula, props in materials_db.get_all_materials().items():
-            if (formula.lower() in instruction_lower or 
-                props.description.lower() in instruction_lower or
-                any(alias in instruction_lower for alias in [formula.lower(), props.formula.lower()])):
+        for formula, props in self.materials_db.get_all_materials().items():
+            if re.search(rf"\b{re.escape(formula.lower())}\b", text) or (
+                props.description.split(" - ")[0].lower() in text
+            ):
                 material = formula
                 break
-        
-        # Fallback to simple keyword matching
-        if not material:
-            if "silicon" in instruction_lower or "si" in instruction_lower:
-                material = "Si"
-            elif "aluminum" in instruction_lower or "al" in instruction_lower:
-                material = "Al"
-            elif "copper" in instruction_lower or "cu" in instruction_lower:
-                material = "Cu"
-            elif "iron" in instruction_lower or "fe" in instruction_lower:
-                material = "Fe"
-            elif "water" in instruction_lower or "h2o" in instruction_lower:
-                material = "H2O"
-            else:
-                material = "Si"  # Default fallback
-        
-        # Extract temperature
+
+        if material is None:
+            keyword_map = {
+                "silicon": "Si", "aluminum": "Al", "aluminium": "Al",
+                "copper": "Cu", "iron": "Fe", "water": "H2O",
+                "carbon": "C", "gold": "Au", "nickel": "Ni",
+            }
+            for keyword, formula in keyword_map.items():
+                if keyword in text:
+                    material = formula
+                    break
+
+        if material is None:
+            material = "Cu"  # a well-supported default
+
         temperature = self.config.default_temperature
-        import re
-        temp_match = re.search(r'(\d+)\s*k', instruction_lower)
+        temp_match = re.search(r"(\d+(?:\.\d+)?)\s*k\b", text)
         if temp_match:
-            temperature = float(temp_match.group(1))
-            # Ensure temperature is within limits
-            temperature = max(self.config.min_temperature, min(temperature, self.config.max_temperature))
-        
-        # Extract force field
+            temperature = max(
+                self.config.min_temperature,
+                min(float(temp_match.group(1)), self.config.max_temperature),
+            )
+
         force_field = self.config.default_force_field
         for ff in self.config.available_force_fields:
-            if ff.lower() in instruction_lower:
+            if ff.lower() in text:
                 force_field = ff
                 break
-        
-        # Extract number of steps
+
         n_steps = self.config.default_n_steps
-        steps_match = re.search(r'(\d+)\s*steps?', instruction_lower)
+        steps_match = re.search(r"(\d+)\s*steps?", text)
         if steps_match:
-            n_steps = int(steps_match.group(1))
-            # Ensure n_steps is within limits
-            n_steps = max(self.config.min_n_steps, min(n_steps, self.config.max_n_steps))
-        
-        return material, temperature, force_field, n_steps
-    
+            n_steps = max(
+                self.config.min_n_steps,
+                min(int(steps_match.group(1)), self.config.max_n_steps),
+            )
+
+        ensemble = self.config.default_ensemble
+        for ens in self.config.available_ensembles:
+            if ens.lower() in text:
+                ensemble = ens
+                break
+
+        return {
+            "material": material,
+            "temperature": temperature,
+            "force_field": force_field,
+            "n_steps": n_steps,
+            "ensemble": ensemble,
+        }
+
     def analyze_results(self, simulation_path: str) -> Dict[str, Any]:
-        """Analyze simulation results.
-        
-        Args:
-            simulation_path: Path to simulation output files
-            
-        Returns:
-            Dictionary containing analysis results
-        """
+        """Analyze real simulation output (RDF, MSD, thermodynamics)."""
+        self.logger.info("Analyzing results from: %s", simulation_path)
         try:
-            self.logger.info(f"Analyzing results from: {simulation_path}")
-            
-            result = self.agent.invoke({
-                "input": f"Please analyze the simulation results from {simulation_path}"
-            })
-            
-            return {
-                "simulation_path": simulation_path,
-                "analysis": result["output"],
-                "success": True,
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Analysis failed: {str(e)}")
-            return {
-                "simulation_path": simulation_path,
-                "error": str(e),
-                "success": False,
-            }
-    
+            from ..analysis_engine import analyze_all
+
+            result = analyze_all(simulation_path)
+            result.setdefault("simulation_path", simulation_path)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Analysis failed")
+            return {"success": False, "simulation_path": simulation_path, "error": str(exc)}
+
     def query_database(self, query: str) -> Dict[str, Any]:
-        """Query materials databases.
-        
-        Args:
-            query: Natural language query about materials properties
-            
-        Returns:
-            Dictionary containing query results
-        """
+        """Query materials databases (Materials Project) if configured."""
+        self.logger.info("Querying database: %s", query)
         try:
-            self.logger.info(f"Querying database: {query}")
-            
-            result = self.agent.invoke({
-                "input": f"Please query the materials database for: {query}"
-            })
-            
+            from ..tools.database import DatabaseTool
+
+            tool = DatabaseTool(self.config)
+            results = tool.query_materials_project(query)
+            return {"success": results.get("success", True), "query": query, "results": results}
+        except Exception as exc:  # noqa: BLE001
+            self.logger.warning("Database query unavailable: %s", exc)
             return {
-                "query": query,
-                "results": result["output"],
-                "success": True,
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Database query failed: {str(e)}")
-            return {
-                "query": query,
-                "error": str(e),
                 "success": False,
+                "query": query,
+                "error": (
+                    "Database querying requires the optional 'mp-api' and "
+                    "'pymatgen' packages and a Materials Project API key. "
+                    f"({exc})"
+                ),
             }
-    
+
     def predict_properties(self, material: str, properties: List[str]) -> Dict[str, Any]:
-        """Predict material properties using ML models.
-        
-        Args:
-            material: Material formula or structure
-            properties: List of properties to predict
-            
-        Returns:
-            Dictionary containing predictions
-        """
+        """Predict material properties using the ML tool if available."""
+        self.logger.info("Predicting properties for %s: %s", material, properties)
         try:
-            self.logger.info(f"Predicting properties for {material}: {properties}")
-            
-            result = self.agent.invoke({
-                "input": f"Please predict the following properties for {material}: {', '.join(properties)}"
-            })
-            
+            from ..tools.ml import MLTool  # noqa: F401
+
             return {
-                "material": material,
-                "properties": properties,
-                "predictions": result["output"],
-                "success": True,
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Property prediction failed: {str(e)}")
-            return {
-                "material": material,
-                "properties": properties,
-                "error": str(e),
                 "success": False,
+                "material": material,
+                "properties": properties,
+                "error": (
+                    "Property prediction requires a trained model. Train one via "
+                    "the ML tool before requesting predictions."
+                ),
             }
-    
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "success": False,
+                "material": material,
+                "properties": properties,
+                "error": (
+                    "ML prediction requires the optional 'torch'/'scikit-learn' "
+                    f"stack. ({exc})"
+                ),
+            }
+
+    # ------------------------------------------------------------------
+    # Optional conversational interface
+    # ------------------------------------------------------------------
     def chat(self, message: str) -> str:
-        """Chat with the agent.
-        
-        Args:
-            message: User message
-            
-        Returns:
-            Agent response
-        """
+        """Chat with the agent (requires a configured LLM)."""
+        self.reconfigure_llm(message)
+        if self.agent is None:
+            return (
+                "Conversational chat is unavailable because no OpenAI API key is "
+                "configured. You can still run simulations and analyses directly."
+            )
         try:
-            result = self.agent.invoke({"input": message})
-            return result["output"]
-        except Exception as e:
-            self.logger.error(f"Chat failed: {str(e)}")
-            return f"I encountered an error: {str(e)}"
+            result = self.agent.invoke({"messages": [("user", message)]})
+            messages = result.get("messages", [])
+            if messages:
+                return getattr(messages[-1], "content", str(messages[-1]))
+            return ""
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("Chat failed")
+            return f"I encountered an error: {exc}"

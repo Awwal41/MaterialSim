@@ -1,9 +1,13 @@
-# MaterialSim AI Agent - Requirements
-# Core LLM and AI dependencies
-langchain>=0.1.0
-langchain-openai>=0.0.5
-langchain-community>=0.0.10
-pydantic>=2.5.0
+# MaterialSim AI Agent - Core Requirements
+# These are everything needed to run real MD simulations, analysis, the CLI,
+# and the web GUI. Optional heavy extras (database/ML) live in
+# requirements-optional.txt.
+
+# LLM orchestration (optional conversational chat; core features work without a key)
+langchain>=1.0,<2.0
+langchain-core>=1.0,<2.0
+langchain-openai>=1.0,<2.0
+langgraph>=0.2.0
 python-dotenv>=1.0.0
 
 # Scientific computing and data analysis
@@ -11,43 +15,14 @@ numpy>=1.24.3
 scipy>=1.11.4
 pandas>=2.0.3
 matplotlib>=3.7.2
-seaborn>=0.12.2
-plotly>=5.17.0
 
-# Materials science and molecular dynamics
+# Materials science and molecular dynamics (real MD engine)
 ase>=3.22.1
-pymatgen>=2023.8.10
-crystal-toolkit>=2023.8.10
-pymatgen-analysis-diffusion>=2022.0.0
-pymatgen-analysis-structure-matcher>=2023.8.10
 
-# LAMMPS interface
-lammps-cython>=1.0.0
-lammps>=2023.08.02
-
-# Machine learning and AI
-torch>=2.1.0
-scikit-learn>=1.3.2
-tensorflow>=2.15.0
-transformers>=4.35.2
-
-# Database APIs and web requests
-requests>=2.31.0
-aiohttp>=3.9.0
-mp-api>=0.33.0
-
-# Data storage and utilities
-tqdm>=4.66.1
+# Configuration and utilities
+pydantic>=2.5.0
 pyyaml>=6.0.1
-h5py>=3.9.0
-netcdf4>=1.6.4
-pymatgen-io-lammps>=0.0.1
+tqdm>=4.66.1
 
 # Web interface
 streamlit>=1.28.0
-
-# Development and testing (optional)
-pytest>=7.4.3
-black>=23.11.0
-flake8>=6.1.0
-jupyter>=1.0.0

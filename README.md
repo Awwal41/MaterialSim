@@ -36,18 +36,42 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install the package
 pip install -e .
 
-# Set up configuration (API keys are pre-configured!)
-cp config_with_keys.env .env
+# Set up configuration (add YOUR OWN keys - none are bundled)
+cp env.example .env
+# then edit .env and set OPENAI_API_KEY / MP_API_KEY as needed
 
-# Run build script
+# (Optional) verify the environment
 python build.py
-
-# Or run quick setup for immediate use
-python quick_setup.py
 ```
+
+> Note: The core molecular dynamics engine runs locally with [ASE](https://wiki.fysik.dtu.dk/ase/)
+> and does **not** require an API key or an external LAMMPS install. An
+> `OPENAI_API_KEY` is only needed for the optional conversational chat.
 
 ### Detailed Installation
 See [INSTALL.md](docs/INSTALL.md) for comprehensive installation instructions including LAMMPS setup and system requirements.
+
+## 🎙️ JARVIS Voice Mode
+
+Speak to the agent like Tony Stark talks to JARVIS:
+
+```bash
+pip install -r requirements_gui.txt
+python launch_gui.py
+```
+
+1. Click **Activate JARVIS** in the sidebar
+2. Use the microphone or type a command
+3. Say things like:
+   - *"Hey JARVIS, simulate copper at 300 kelvin for 2000 steps"*
+   - *"Analyze the latest simulation results"*
+   - *"Research the best model for property prediction"*
+   - *"What's your status?"*
+
+The agent automatically:
+- **Selects the best LLM** for each task (searches arXiv + web benchmarks)
+- **Runs real MD simulations** and speaks the results
+- **Shows a live Jarvis HUD** animation while listening/thinking/speaking
 
 ## 🚀 Quick Start
 
@@ -55,8 +79,8 @@ See [INSTALL.md](docs/INSTALL.md) for comprehensive installation instructions in
 ```bash
 python launch_gui.py
 
-# Or launch the integrated GUI
-python launch_integrated_gui.py
+# Or run Streamlit directly
+streamlit run gui_app.py
 ```
 The conversational GUI will guide you step-by-step through simulations with natural language interaction!
 
@@ -64,15 +88,18 @@ The conversational GUI will guide you step-by-step through simulations with natu
 ```python
 from materials_ai_agent import MaterialsAgent
 
-# Initialize the agent
+# Initialize the agent (no API key needed for simulation/analysis)
 agent = MaterialsAgent()
 
-# Run a simulation
+# Run a real MD simulation
 result = agent.run_simulation(
-    "Simulate the thermal conductivity of silicon at 300 K using a Tersoff potential"
+    "Simulate copper at 300 K for 5000 steps"
 )
+print(result["success"], result["message"])
 
-print(result)
+# Analyze the real output (RDF, MSD, thermodynamics)
+analysis = agent.analyze_results(result["simulation_directory"])
+print(analysis["rdf"]["first_peak"], "Angstrom nearest-neighbor peak")
 ```
 
 ### Command Line Interface
@@ -92,11 +119,8 @@ materials-agent interactive
 # Run basic example
 python examples/basic_simulation.py
 
-# Run ML training example
+# Run ML training example (requires optional extras)
 python examples/ml_training_example.py
-
-# Run advanced workflow
-python examples/advanced_workflow.py
 ```
 
 ## 📚 Documentation
@@ -110,39 +134,33 @@ python examples/advanced_workflow.py
 
 ## 🔬 Example Use Cases
 
-### 1. Thermal Conductivity Study
+### 1. Multi-material Study
 ```python
-# Study multiple materials
-materials = ["Si", "Al2O3", "Fe"]
-for material in materials:
-    result = agent.run_simulation(
-        f"Simulate {material} thermal conductivity at 300 K"
-    )
-    analysis = agent.analyze_results(result["simulation_directory"])
+# Study multiple materials (EMT-supported metals run with real physics)
+for material in ["Cu", "Al", "Au", "Ni"]:
+    result = agent.run_simulation(f"Simulate {material} at 300 K for 2000 steps")
+    if result["success"]:
+        analysis = agent.analyze_results(result["simulation_directory"])
+        print(material, analysis["rdf"]["first_peak"])
 ```
 
-### 2. Machine Learning Property Prediction
+### 2. Machine Learning Property Prediction (optional extras)
 ```python
-# Train ML model
-train_result = agent.tools[3].train_property_predictor(
+# Requires: pip install -r requirements-optional.txt
+from materials_ai_agent.tools import MLTool
+
+ml = MLTool(agent.config)
+train_result = ml.train_property_predictor(
     training_data="data.csv",
-    target_property="elastic_modulus"
-)
-
-# Make predictions
-prediction = agent.tools[3].predict_property(
-    model_name=train_result["model_name"],
-    features=[0.8, 0.1, 0.1, 300, 1.0, 100]
+    target_property="elastic_modulus",
 )
 ```
 
-### 3. Database Integration
+### 3. Database Integration (optional extras)
 ```python
-# Query Materials Project
-mp_data = agent.tools[2].query_materials_project("Si")
-
-# Search by structure
-similar = agent.tools[2].search_by_structure(structure_dict)
+# Requires pymatgen + mp-api and a Materials Project API key
+result = agent.query_database("Si")
+print(result["success"], result.get("results"))
 ```
 
 ## 🏗️ Architecture
@@ -210,11 +228,12 @@ See [INSTALL.md](docs/INSTALL.md) for detailed troubleshooting.
 
 ## 📈 Roadmap
 
+- [x] Real local MD engine (ASE) with RDF/MSD/thermodynamics analysis
+- [x] Web interface (Streamlit)
+- [ ] Optional LAMMPS backend for large-scale runs
 - [ ] Additional MD engines (GROMACS, HOOMD-blue)
 - [ ] Advanced ML models (Graph neural networks)
-- [ ] Web interface
 - [ ] Cloud deployment
-- [ ] Real-time collaboration
 
 ---
 

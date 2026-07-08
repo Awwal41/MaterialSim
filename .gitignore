@@ -28,12 +28,16 @@ ENV/
 env.bak/
 venv.bak/
 
-# Environment variables
+# Environment variables and local key-bearing configs
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+config_with_keys.env
+config_with_keys.yaml
+my_config.yaml
+*_with_keys.*
 
 # IDE
 .vscode/
@@ -80,7 +84,8 @@ models/
 *.pkl
 
 # Streamlit
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 
 # Other project files (exclude from this repo)
 ray_results/

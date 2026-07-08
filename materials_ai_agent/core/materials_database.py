@@ -139,15 +139,14 @@ class MaterialsDatabase:
         }
     
     def get_material(self, formula: str) -> Optional[MaterialProperties]:
-        """Get material properties by formula.
-        
-        Args:
-            formula: Material formula (e.g., 'Si', 'Al', 'H2O')
-            
-        Returns:
-            MaterialProperties object or None if not found
-        """
-        return self.materials.get(formula.upper())
+        """Get material properties by formula (case-insensitive)."""
+        if formula in self.materials:
+            return self.materials[formula]
+        upper = formula.upper()
+        for key, props in self.materials.items():
+            if key.upper() == upper:
+                return props
+        return None
     
     def get_all_materials(self) -> Dict[str, MaterialProperties]:
         """Get all available materials.

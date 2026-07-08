@@ -112,7 +112,7 @@ class SimulationTool(BaseMaterialsTool):
                 "success": True,
                 "simulation_directory": str(sim_dir),
                 "input_file": str(input_file),
-                "parameters": params.dict(),
+                "parameters": params.model_dump(),
                 "structure_info": {
                     "formula": structure.get_chemical_formula(),
                     "n_atoms": len(structure),

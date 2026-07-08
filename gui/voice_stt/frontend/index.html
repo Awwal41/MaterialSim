@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="https://unpkg.com/streamlit-component-lib@1.0.0/dist/index.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: transparent;
+      color: #e8edf4;
+      padding: 0.5rem 0;
+    }
+    .wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .mic-btn {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      border: 2px solid rgba(45, 212, 191, 0.45);
+      background: radial-gradient(circle at 35% 30%, #2dd4bf 0%, #0d9488 55%, #042f2e 100%);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 24px rgba(45, 212, 191, 0.35);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      position: relative;
+    }
+    .mic-btn:hover { transform: scale(1.04); }
+    .mic-btn.active {
+      animation: pulse 1.2s ease-in-out infinite;
+      box-shadow: 0 0 36px rgba(45, 212, 191, 0.65);
+    }
+    .mic-btn svg { width: 28px; height: 28px; fill: #042f2e; }
+    .rings {
+      position: absolute;
+      inset: -12px;
+      border-radius: 50%;
+      border: 1px solid rgba(45, 212, 191, 0.25);
+      animation: ring 2s ease-out infinite;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .mic-btn.active .rings { opacity: 1; }
+    .status {
+      font-size: 0.82rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #8b9cb3;
+      min-height: 1.2em;
+    }
+    .status.live { color: #2dd4bf; }
+    .transcript {
+      width: 100%;
+      min-height: 2.5rem;
+      text-align: center;
+      font-size: 0.95rem;
+      line-height: 1.45;
+      color: #ccefe8;
+      padding: 0 0.5rem;
+    }
+    .transcript .interim { color: #6b8f9c; font-style: italic; }
+    .hint {
+      font-size: 0.78rem;
+      color: #6b7c90;
+      text-align: center;
+      max-width: 320px;
+      line-height: 1.4;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
+    }
+    @keyframes ring {
+      0% { transform: scale(1); opacity: 0.6; }
+      100% { transform: scale(1.35); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <button class="mic-btn" id="micBtn" type="button" title="Tap to talk">
+      <span class="rings"></span>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+      </svg>
+    </button>
+    <div class="status" id="status">Tap the microphone to start</div>
+    <div class="transcript" id="transcript"></div>
+    <div class="hint" id="hint">Conversation mode: speak naturally, pause when finished — I'll reply aloud and listen again.</div>
+  </div>
+
+  <script>
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const micBtn = document.getElementById("micBtn");
+    const statusEl = document.getElementById("status");
+    const transcriptEl = document.getElementById("transcript");
+    const hintEl = document.getElementById("hint");
+
+    let recognition = null;
+    let listening = false;
+    let shouldListen = false;
+    let finalBuffer = "";
+    let silenceTimer = null;
+    let lastSent = "";
+
+    function setStatus(text, live) {
+      statusEl.textContent = text;
+      statusEl.className = live ? "status live" : "status";
+    }
+
+    function send(payload) {
+      Streamlit.setComponentValue(payload);
+    }
+
+    function resetTranscript() {
+      finalBuffer = "";
+      transcriptEl.innerHTML = "";
+    }
+
+    function showTranscript(interim) {
+      const finalPart = finalBuffer ? `<span>${finalBuffer}</span> ` : "";
+      const interimPart = interim ? `<span class="interim">${interim}</span>` : "";
+      transcriptEl.innerHTML = finalPart + interimPart;
+    }
+
+    function finishUtterance() {
+      const text = finalBuffer.trim();
+      resetTranscript();
+      if (text && text !== lastSent) {
+        lastSent = text;
+        stopListening();
+        send({ utterance: text, event: "utterance" });
+      }
+    }
+
+    function scheduleFinish() {
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(finishUtterance, 1200);
+    }
+
+    function startListening() {
+      if (!SpeechRecognition) {
+        setStatus("Speech recognition not supported in this browser", false);
+        hintEl.textContent = "Use Chrome or Edge, or type your message below.";
+        send({ utterance: null, event: "unsupported" });
+        return;
+      }
+      if (listening) return;
+
+      recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        listening = true;
+        micBtn.classList.add("active");
+        setStatus("Listening…", true);
+      };
+
+      recognition.onresult = (event) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalBuffer += (finalBuffer ? " " : "") + t.trim();
+          } else {
+            interim += t;
+          }
+        }
+        showTranscript(interim);
+        if (finalBuffer) scheduleFinish();
+      };
+
+      recognition.onerror = (e) => {
+        if (e.error === "no-speech") {
+          setStatus("No speech detected — tap to try again", false);
+        } else if (e.error !== "aborted") {
+          setStatus("Mic error: " + e.error, false);
+          send({ utterance: null, event: "error", detail: e.error });
+        }
+        stopListening();
+      };
+
+      recognition.onend = () => {
+        listening = false;
+        micBtn.classList.remove("active");
+        if (shouldListen) {
+          try { recognition.start(); } catch (_) {}
+        } else {
+          setStatus("Tap the microphone to speak", false);
+        }
+      };
+
+      shouldListen = true;
+      try {
+        recognition.start();
+      } catch (_) {}
+    }
+
+    function stopListening() {
+      shouldListen = false;
+      clearTimeout(silenceTimer);
+      if (recognition && listening) {
+        try { recognition.stop(); } catch (_) {}
+      }
+      micBtn.classList.remove("active");
+      setStatus("Processing…", false);
+    }
+
+    micBtn.addEventListener("click", () => {
+      if (listening) {
+        finishUtterance();
+      } else {
+        lastSent = "";
+        resetTranscript();
+        startListening();
+      }
+    });
+
+    function onRender(event) {
+      const args = event.detail.args || {};
+      if (args.auto_listen && !listening) {
+        setTimeout(() => startListening(), args.delay_ms || 400);
+      }
+      if (args.hint) hintEl.textContent = args.hint;
+    }
+
+    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    Streamlit.setComponentReady();
+    send({ utterance: null, event: "ready" });
+  </script>
+</body>
+</html>

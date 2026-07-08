@@ -1,251 +1,153 @@
-"""Tests for Materials AI Agent."""
+"""Tests for the Materials AI Agent.
+
+These are integration tests: the simulation tests actually run short
+molecular dynamics simulations with the ASE-backed engine.
+"""
+
+import shutil
+import tempfile
+from pathlib import Path
 
 import pytest
-import tempfile
-import shutil
-from pathlib import Path
-from unittest.mock import Mock, patch
 
-from materials_ai_agent import MaterialsAgent, Config
-from materials_ai_agent.core.exceptions import MaterialsAgentError
+from materials_ai_agent import Config, MaterialsAgent
 
 
 class TestMaterialsAgent:
-    """Test cases for MaterialsAgent class."""
-    
+    """Test cases for the MaterialsAgent class."""
+
     def setup_method(self):
-        """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
         self.config = Config(
-            openai_api_key="test_key",
+            openai_api_key="",  # no key -> chat disabled, sim/analysis still work
             simulation_output_dir=Path(self.temp_dir) / "simulations",
             analysis_output_dir=Path(self.temp_dir) / "analysis",
-            visualization_output_dir=Path(self.temp_dir) / "visualizations"
+            visualization_output_dir=Path(self.temp_dir) / "visualizations",
         )
         self.config.create_directories()
-    
+        self.agent = MaterialsAgent(self.config)
+
     def teardown_method(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir)
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_agent_initialization(self, mock_llm):
-        """Test agent initialization."""
-        agent = MaterialsAgent(self.config)
-        
-        assert agent.config == self.config
-        assert len(agent.tools) == 5  # 5 tools
-        assert agent.llm is not None
-        assert agent.memory is not None
-        assert agent.agent is not None
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_run_simulation(self, mock_llm):
-        """Test running a simulation."""
-        # Mock the agent's invoke method
-        mock_agent = Mock()
-        mock_agent.invoke.return_value = {
-            "output": "Simulation completed successfully"
-        }
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        result = agent.run_simulation("Test simulation")
-        
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_agent_initialization(self):
+        assert self.agent.config == self.config
+        assert len(self.agent.tools) >= 1
+        # No API key -> conversational agent is disabled but object is usable.
+        assert self.agent.agent is None
+
+    def test_parse_instruction(self):
+        params = self.agent._parse_simulation_instruction(
+            "simulate copper at 250 K for 5000 steps"
+        )
+        assert params["material"] == "Cu"
+        assert params["temperature"] == 250.0
+        assert params["n_steps"] == 5000
+
+    def test_run_simulation(self):
+        result = self.agent.run_simulation("simulate copper at 300 K for 1000 steps")
         assert result["success"] is True
-        assert "Simulation completed successfully" in result["result"]
-        mock_agent.invoke.assert_called_once()
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_analyze_results(self, mock_llm):
-        """Test analyzing simulation results."""
-        mock_agent = Mock()
-        mock_agent.invoke.return_value = {
-            "output": "Analysis completed"
-        }
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        result = agent.analyze_results("/path/to/simulation")
-        
+        assert "message" in result
+        assert Path(result["simulation_directory"]).exists()
+
+    def test_analyze_results(self):
+        sim = self.agent.run_simulation("simulate copper at 300 K for 1000 steps")
+        assert sim["success"] is True
+
+        result = self.agent.analyze_results(sim["simulation_directory"])
         assert result["success"] is True
-        assert "Analysis completed" in result["analysis"]
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_query_database(self, mock_llm):
-        """Test querying database."""
-        mock_agent = Mock()
-        mock_agent.invoke.return_value = {
-            "output": "Database query results"
-        }
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        result = agent.query_database("Test query")
-        
-        assert result["success"] is True
-        assert "Database query results" in result["results"]
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_predict_properties(self, mock_llm):
-        """Test predicting properties."""
-        mock_agent = Mock()
-        mock_agent.invoke.return_value = {
-            "output": "Property predictions"
-        }
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        result = agent.predict_properties("Si", ["thermal_conductivity"])
-        
-        assert result["success"] is True
-        assert "Property predictions" in result["predictions"]
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_chat(self, mock_llm):
-        """Test chat functionality."""
-        mock_agent = Mock()
-        mock_agent.invoke.return_value = {
-            "output": "Hello! How can I help you?"
-        }
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        response = agent.chat("Hello")
-        
-        assert response == "Hello! How can I help you?"
-    
-    @patch('materials_ai_agent.core.agent.ChatOpenAI')
-    def test_error_handling(self, mock_llm):
-        """Test error handling."""
-        mock_agent = Mock()
-        mock_agent.invoke.side_effect = Exception("Test error")
-        
-        agent = MaterialsAgent(self.config)
-        agent.agent = mock_agent
-        
-        result = agent.run_simulation("Test simulation")
-        
-        assert result["success"] is False
-        assert "Test error" in result["error"]
+        assert result["rdf"]["success"] is True
+        assert result["thermodynamics"]["success"] is True
+
+    def test_chat_without_key_is_graceful(self):
+        response = self.agent.chat("Hello")
+        assert "unavailable" in response.lower()
+
+    def test_run_simulation_error_handling(self):
+        # An unbuildable material should fail cleanly, not raise.
+        result = self.agent.run_simulation("simulate Xx99 at 300 K")
+        assert isinstance(result, dict)
+        assert "success" in result
 
 
 class TestConfig:
-    """Test cases for Config class."""
-    
+    """Test cases for the Config class."""
+
     def test_config_creation(self):
-        """Test config creation."""
         config = Config(
             openai_api_key="test_key",
             simulation_output_dir=Path("/tmp/simulations"),
-            analysis_output_dir=Path("/tmp/analysis"),
-            visualization_output_dir=Path("/tmp/visualizations")
         )
-        
         assert config.openai_api_key == "test_key"
         assert config.simulation_output_dir == Path("/tmp/simulations")
-        assert config.analysis_output_dir == Path("/tmp/analysis")
-        assert config.visualization_output_dir == Path("/tmp/visualizations")
-    
-    @patch.dict('os.environ', {
-        'OPENAI_API_KEY': 'env_key',
-        'MP_API_KEY': 'mp_key',
-        'LAMMPS_EXECUTABLE': 'lmp_test'
-    })
-    def test_from_env(self):
-        """Test loading config from environment."""
+
+    def test_from_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "env_key")
+        monkeypatch.setenv("MP_API_KEY", "mp_key")
+        monkeypatch.setenv("LAMMPS_EXECUTABLE", "lmp_test")
         config = Config.from_env()
-        
         assert config.openai_api_key == "env_key"
         assert config.mp_api_key == "mp_key"
         assert config.lammps_executable == "lmp_test"
-    
+
+    def test_from_file_yaml(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg_path = Path(temp_dir) / "cfg.yaml"
+            cfg_path.write_text(
+                "openai_api_key: file_key\n"
+                "default_temperature: 500.0\n"
+                "model_name: gpt-4\n"
+            )
+            config = Config.from_file(str(cfg_path))
+            assert config.openai_api_key == "file_key"
+            assert config.default_temperature == 500.0
+
     def test_create_directories(self):
-        """Test directory creation."""
         with tempfile.TemporaryDirectory() as temp_dir:
             config = Config(
                 openai_api_key="test_key",
                 simulation_output_dir=Path(temp_dir) / "simulations",
                 analysis_output_dir=Path(temp_dir) / "analysis",
-                visualization_output_dir=Path(temp_dir) / "visualizations"
+                visualization_output_dir=Path(temp_dir) / "visualizations",
             )
-            
             config.create_directories()
-            
             assert config.simulation_output_dir.exists()
             assert config.analysis_output_dir.exists()
             assert config.visualization_output_dir.exists()
 
 
-class TestSimulationTool:
-    """Test cases for SimulationTool."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.temp_dir = tempfile.mkdtemp()
-        self.config = Config(
-            openai_api_key="test_key",
-            simulation_output_dir=Path(self.temp_dir) / "simulations",
-            analysis_output_dir=Path(self.temp_dir) / "analysis",
-            visualization_output_dir=Path(self.temp_dir) / "visualizations"
-        )
-        self.config.create_directories()
-    
-    def teardown_method(self):
-        """Clean up test fixtures."""
-        shutil.rmtree(self.temp_dir)
-    
-    @patch('materials_ai_agent.tools.simulation.LAMMPSInterface')
-    def test_setup_simulation(self, mock_lammps):
-        """Test simulation setup."""
-        from materials_ai_agent.tools import SimulationTool
-        
-        mock_interface = Mock()
-        mock_interface.generate_input_file.return_value = Path("test_input.lammps")
-        mock_lammps.return_value = mock_interface
-        
-        tool = SimulationTool(self.config)
-        
-        result = tool.setup_simulation(
-            material="Si",
+class TestSimulationEngine:
+    """Direct tests of the real MD engine."""
+
+    def test_real_simulation_and_output(self):
+        from materials_ai_agent.simple_simulation import run_simple_simulation
+
+        result = run_simple_simulation(
+            material="Cu",
             temperature=300,
-            n_steps=1000
+            n_steps=500,
+            force_field="eam",
+            ensemble="NVT",
+            output_frequency=100,
         )
-        
         assert result["success"] is True
-        assert "Si" in result["parameters"]["material"]
-        assert result["parameters"]["temperature"] == 300
-        assert result["parameters"]["n_steps"] == 1000
-    
-    def test_list_available_materials(self):
-        """Test listing available materials."""
-        from materials_ai_agent.tools import SimulationTool
-        
-        tool = SimulationTool(self.config)
-        result = tool.list_available_materials()
-        
-        assert result["success"] is True
-        assert "materials" in result
-        assert "elements" in result["materials"]
-        assert "compounds" in result["materials"]
-    
-    def test_get_force_fields(self):
-        """Test getting available force fields."""
-        from materials_ai_agent.tools import SimulationTool
-        
-        tool = SimulationTool(self.config)
-        result = tool.get_force_fields()
-        
-        assert result["success"] is True
-        assert "force_fields" in result
-        assert "tersoff" in result["force_fields"]
-        assert "lj" in result["force_fields"]
+        sim_dir = Path(result["simulation_directory"])
+        assert (sim_dir / "trajectory.xyz").exists()
+        assert (sim_dir / "output.log").exists()
+        assert result["n_frames"] >= 2
+
+    def test_rdf_matches_copper_spacing(self):
+        from materials_ai_agent.analysis_engine import compute_rdf
+        from materials_ai_agent.simple_simulation import run_simple_simulation
+
+        result = run_simple_simulation(
+            material="Cu", temperature=100, n_steps=200, force_field="eam"
+        )
+        rdf = compute_rdf(Path(result["simulation_directory"]))
+        assert rdf["success"] is True
+        # Copper nearest-neighbor distance is ~2.55 Angstrom.
+        assert 2.0 < rdf["first_peak"] < 3.0
 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, "-v"])

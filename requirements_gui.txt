@@ -1,12 +1,13 @@
-# MaterialSim AI Agent - GUI Requirements
-# This file contains only the GUI-specific dependencies
-# The main requirements.txt contains all dependencies
+# MaterialSim AI Agent - GUI + Voice (JARVIS) Requirements
+# Install after core requirements: pip install -r requirements_gui.txt
 
-# Web interface
-streamlit>=1.28.0
-
-# Visualization
+streamlit>=1.37.0
 plotly>=5.17.0
 
-# Note: Install main requirements first:
-# pip install -r requirements.txt
+# JARVIS voice interface
+edge-tts>=6.1.0
+SpeechRecognition>=3.10.0
+pydub>=0.25.1
+
+# Online model / literature research
+ddgs>=9.0.0
