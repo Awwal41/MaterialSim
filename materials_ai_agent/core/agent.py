@@ -1,7 +1,6 @@
 """Main Materials AI Agent class."""
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 from .config import Config
@@ -117,6 +116,8 @@ class MaterialsAgent:
             "analyze their results, search literature, and recommend the best "
             "approaches. When a user asks you to run a simulation, call the "
             "simulation tool rather than only describing what to do. "
+            "For complex requests (alloys, NPT, pressure, supercells, compounds, "
+            "duration in ps/ns), prefer run_simulation_from_instruction. "
             "Always check simulation quality: if temperature, pressure, or "
             "equilibration warnings are present, explain clearly that the run "
             "did not converge and suggest fixes (longer equilibration, smaller "
@@ -173,66 +174,10 @@ class MaterialsAgent:
 
     def _parse_simulation_instruction(self, instruction: str) -> Dict[str, Any]:
         """Extract simulation parameters from a natural-language instruction."""
-        text = instruction.lower()
+        from ..simulation_parser import parse_simulation_instruction
 
-        # Material: try the database first, then a small keyword map.
-        material = None
-        for formula, props in self.materials_db.get_all_materials().items():
-            if re.search(rf"\b{re.escape(formula.lower())}\b", text) or (
-                props.description.split(" - ")[0].lower() in text
-            ):
-                material = formula
-                break
-
-        if material is None:
-            keyword_map = {
-                "silicon": "Si", "aluminum": "Al", "aluminium": "Al",
-                "copper": "Cu", "iron": "Fe", "water": "H2O",
-                "carbon": "C", "gold": "Au", "nickel": "Ni",
-            }
-            for keyword, formula in keyword_map.items():
-                if keyword in text:
-                    material = formula
-                    break
-
-        if material is None:
-            material = "Cu"  # a well-supported default
-
-        temperature = self.config.default_temperature
-        temp_match = re.search(r"(\d+(?:\.\d+)?)\s*k\b", text)
-        if temp_match:
-            temperature = max(
-                self.config.min_temperature,
-                min(float(temp_match.group(1)), self.config.max_temperature),
-            )
-
-        force_field = self.config.default_force_field
-        for ff in self.config.available_force_fields:
-            if ff.lower() in text:
-                force_field = ff
-                break
-
-        n_steps = self.config.default_n_steps
-        steps_match = re.search(r"(\d+)\s*steps?", text)
-        if steps_match:
-            n_steps = max(
-                self.config.min_n_steps,
-                min(int(steps_match.group(1)), self.config.max_n_steps),
-            )
-
-        ensemble = self.config.default_ensemble
-        for ens in self.config.available_ensembles:
-            if ens.lower() in text:
-                ensemble = ens
-                break
-
-        return {
-            "material": material,
-            "temperature": temperature,
-            "force_field": force_field,
-            "n_steps": n_steps,
-            "ensemble": ensemble,
-        }
+        spec = parse_simulation_instruction(instruction, self.config)
+        return spec.to_run_kwargs()
 
     def analyze_results(self, simulation_path: str) -> Dict[str, Any]:
         """Analyze real simulation output (RDF, MSD, thermodynamics)."""

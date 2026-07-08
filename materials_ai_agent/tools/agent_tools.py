@@ -9,7 +9,8 @@ from typing import List, Optional
 from langchain_core.tools import tool
 
 from ..analysis_engine import analyze_all, find_simulation_dir
-from ..simple_simulation import run_simple_simulation
+from ..simulation_parser import parse_simulation_instruction
+from ..simple_simulation import run_from_spec, run_simple_simulation
 
 
 def create_agent_tools(config) -> List:
@@ -19,30 +20,62 @@ def create_agent_tools(config) -> List:
     def run_md_simulation(
         material: str,
         temperature: Optional[float] = None,
+        pressure: Optional[float] = None,
         n_steps: Optional[int] = None,
         force_field: Optional[str] = None,
         ensemble: Optional[str] = None,
+        thermostat: Optional[str] = None,
+        timestep: Optional[float] = None,
+        target_atoms: Optional[int] = None,
+        structure_file: Optional[str] = None,
     ) -> str:
         """Run molecular dynamics simulation and return a summary.
 
         Args:
-            material: Material formula, e.g. 'Cu', 'Al', 'Si', 'H2O'.
+            material: Material formula, e.g. 'Cu', 'Al', 'Al2O3', 'CuNi'.
             temperature: Temperature in Kelvin.
+            pressure: Pressure in atm (for NPT).
             n_steps: Number of MD steps to run.
             force_field: Preferred potential ('emt', 'lj', 'eam', 'tersoff').
             ensemble: Thermodynamic ensemble ('NVE', 'NVT', 'NPT').
+            thermostat: Thermostat ('Langevin', 'Berendsen', 'Nose-Hoover').
+            timestep: Integration timestep in ps.
+            target_atoms: Approximate number of atoms in the generated supercell.
+            structure_file: Optional path to XYZ/CIF/POSCAR to load instead of building.
         """
         result = run_simple_simulation(
             material=material,
             temperature=temperature,
+            pressure=pressure,
             n_steps=n_steps,
             force_field=force_field,
             ensemble=ensemble,
+            thermostat=thermostat,
+            timestep=timestep,
+            target_atoms=target_atoms or 64,
+            structure_file=structure_file,
+            structure_source="file" if structure_file else "generate",
         )
         if result.get("success"):
             return (
                 f"{result['message']}. Output written to "
                 f"{result['simulation_directory']}."
+            )
+        return f"Simulation failed: {result.get('error')}"
+
+    @tool
+    def run_simulation_from_instruction(instruction: str) -> str:
+        """Parse a natural-language MD request and run the simulation.
+
+        Examples: 'NPT CuNi alloy at 800 K and 50 bar for 20 ps',
+        '256 atom Al supercell NVT at 500 K for 5000 steps'.
+        """
+        spec = parse_simulation_instruction(instruction, config)
+        result = run_from_spec(spec)
+        if result.get("success"):
+            return (
+                f"Parsed: {spec.summary()}. {result['message']} "
+                f"Output: {result['simulation_directory']}."
             )
         return f"Simulation failed: {result.get('error')}"
 
@@ -123,6 +156,7 @@ def create_agent_tools(config) -> List:
 
     return [
         run_md_simulation,
+        run_simulation_from_instruction,
         analyze_simulation,
         list_available_materials,
         locate_latest_simulation,

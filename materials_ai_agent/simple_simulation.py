@@ -9,14 +9,14 @@ thermodynamic output files plus a ``meta.json`` quality manifest.
 
 import json
 import logging
+import re
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 from ase import Atoms, units
-from ase.build import bulk, molecule
 from ase.io import write
 from ase.md.langevin import Langevin
+from ase.md.nptberendsen import NPTBerendsen
 from ase.md.nvtberendsen import NVTBerendsen
 from ase.md.velocitydistribution import Stationary, ZeroRotation, thermalize_momenta
 from ase.md.verlet import VelocityVerlet
@@ -28,6 +28,7 @@ from .md.potentials import (
     select_calculator,
 )
 from .simulation_quality import assess_simulation_quality
+from .structure_builder import build_atoms
 
 logger = logging.getLogger(__name__)
 
@@ -35,12 +36,19 @@ logger = logging.getLogger(__name__)
 def run_simple_simulation(
     material: str,
     temperature: Optional[float] = None,
+    pressure: Optional[float] = None,
     n_steps: Optional[int] = None,
     force_field: Optional[str] = None,
     ensemble: Optional[str] = None,
     thermostat: Optional[str] = None,
     timestep: Optional[float] = None,
     output_frequency: Optional[int] = None,
+    structure_source: str = "generate",
+    structure_file: Optional[str] = None,
+    supercell_reps: Optional[Tuple[int, int, int]] = None,
+    target_atoms: int = 64,
+    alloy_elements: Optional[List[str]] = None,
+    alloy_fractions: Optional[List[float]] = None,
     **_ignored: Any,
 ) -> Dict[str, Any]:
     """Run a real molecular dynamics simulation with equilibration + production."""
@@ -52,6 +60,7 @@ def run_simple_simulation(
         materials_db = MaterialsDatabase()
 
         temperature = float(temperature if temperature is not None else config.default_temperature)
+        pressure = float(pressure if pressure is not None else config.default_pressure)
         n_steps = int(n_steps if n_steps is not None else config.default_n_steps)
         force_field = force_field or config.default_force_field
         ensemble = (ensemble or config.default_ensemble).upper()
@@ -59,15 +68,22 @@ def run_simple_simulation(
         output_frequency = int(output_frequency or 100)
         output_frequency = max(1, min(output_frequency, max(1, n_steps)))
 
-        sim_dir = Path("simulations") / f"{material}_{temperature}K_{n_steps}steps"
+        sim_dir = Path("simulations") / _simulation_dir_name(
+            material, temperature, ensemble, pressure, n_steps, len(alloy_elements or [])
+        )
         sim_dir.mkdir(parents=True, exist_ok=True)
 
-        material_props = materials_db.get_material(material)
-        if material_props is not None:
-            atoms = _build_structure(material, material_props)
-        else:
-            atoms = _build_fallback_structure(material)
+        atoms = build_atoms(
+            material,
+            structure_source=structure_source,
+            structure_file=structure_file,
+            supercell_reps=supercell_reps,
+            target_atoms=target_atoms,
+            alloy_elements=alloy_elements,
+            alloy_fractions=alloy_fractions,
+        )
 
+        material_props = materials_db.get_material(material)
         calculator, used_force_field, potential_warnings = select_calculator(
             atoms, force_field, material
         )
@@ -91,6 +107,7 @@ def run_simple_simulation(
             atoms=atoms,
             sim_dir=sim_dir,
             temperature=temperature,
+            pressure_atm=pressure,
             n_equilibration_steps=n_eq,
             n_production_steps=n_prod,
             ensemble=ensemble,
@@ -102,11 +119,19 @@ def run_simple_simulation(
         meta = {
             "material": material,
             "target_temperature": temperature,
+            "target_pressure_atm": pressure,
             "ensemble": ensemble,
             "thermostat": thermostat,
             "force_field": used_force_field,
             "requested_force_field": force_field,
             "timestep_ps": timestep,
+            "n_atoms": len(atoms),
+            "structure_source": structure_source,
+            "structure_file": structure_file,
+            "supercell_reps": list(supercell_reps) if supercell_reps else None,
+            "target_atoms": target_atoms,
+            "alloy_elements": alloy_elements,
+            "alloy_fractions": alloy_fractions,
             "n_equilibration_steps": n_eq,
             "n_production_steps": n_prod,
             "production_start_step": production_start_step,
@@ -119,8 +144,11 @@ def run_simple_simulation(
 
         message = (
             f"Completed {n_steps}-step {ensemble} MD simulation of {material} "
-            f"({len(atoms)} atoms) at {temperature:g} K using the {used_force_field} potential."
+            f"({len(atoms)} atoms) at {temperature:g} K"
         )
+        if ensemble == "NPT":
+            message += f" and {pressure:g} atm"
+        message += f" using the {used_force_field} potential."
         if not quality.get("converged"):
             message += " Warning: the run did not fully equilibrate — see quality report."
 
@@ -128,6 +156,7 @@ def run_simple_simulation(
             "success": True,
             "material": material,
             "temperature": temperature,
+            "pressure": pressure,
             "n_steps": n_steps,
             "force_field": used_force_field,
             "ensemble": ensemble,
@@ -148,10 +177,29 @@ def run_simple_simulation(
         return {"success": False, "error": f"Simulation failed: {exc}"}
 
 
+def _simulation_dir_name(
+    material: str,
+    temperature: float,
+    ensemble: str,
+    pressure_atm: float,
+    n_steps: int,
+    n_alloy_elements: int,
+) -> str:
+    """Build a filesystem-safe directory name for a run."""
+    safe_material = re.sub(r"[^\w.-]", "_", material)[:40]
+    parts = [safe_material, f"{temperature:g}K", ensemble, f"{n_steps}steps"]
+    if ensemble == "NPT" and abs(pressure_atm - 1.0) > 0.01:
+        parts.insert(3, f"{pressure_atm:g}atm")
+    if n_alloy_elements >= 2:
+        parts.insert(1, "alloy")
+    return "_".join(parts)
+
+
 def _run_md(
     atoms: Atoms,
     sim_dir: Path,
     temperature: float,
+    pressure_atm: float,
     n_equilibration_steps: int,
     n_production_steps: int,
     ensemble: str,
@@ -172,6 +220,7 @@ def _run_md(
     with open(trajectory_file, "w") as traj, open(log_file, "w") as log:
         log.write(f"LAMMPS-style MD log generated by MaterialSim (ASE {ensemble})\n")
         log.write(f"# target_temperature_K={temperature}\n")
+        log.write(f"# target_pressure_atm={pressure_atm}\n")
         log.write("Step Temp PotEng KinEng TotEng Press Volume\n")
 
         def _record(mark_production: bool = True) -> None:
@@ -211,7 +260,7 @@ def _run_md(
         thermalize_momenta(atoms, temperature_K=temperature)
         _zero_drift(atoms)
         dyn = _make_integrator(
-            atoms, ensemble, thermostat, dt, temperature, friction=0.08
+            atoms, ensemble, thermostat, dt, temperature, pressure_atm, friction=0.08
         )
         dyn.attach(lambda: _record(mark_production=False), interval=output_frequency)
         _record(mark_production=False)
@@ -223,7 +272,7 @@ def _run_md(
         thermalize_momenta(atoms, temperature_K=temperature)
         _zero_drift(atoms)
         dyn = _make_integrator(
-            atoms, ensemble, thermostat, dt, temperature, friction=0.03
+            atoms, ensemble, thermostat, dt, temperature, pressure_atm, friction=0.03
         )
         dyn.attach(lambda: _record(mark_production=True), interval=output_frequency)
         _record(mark_production=True)
@@ -259,13 +308,25 @@ def _make_integrator(
     thermostat: str,
     dt: float,
     temperature: float,
+    pressure_atm: float = 1.0,
     friction: float = 0.03,
 ):
     """Choose an ASE integrator based on ensemble and thermostat."""
     thermostat_l = (thermostat or "").lower()
+    pressure_bar = pressure_atm * 1.01325 * units.bar
 
     if ensemble == "NVE":
         return VelocityVerlet(atoms, timestep=dt)
+
+    if ensemble == "NPT":
+        return NPTBerendsen(
+            atoms,
+            timestep=dt,
+            temperature_K=temperature,
+            pressure_au=pressure_bar,
+            taut=max(50 * dt, 25.0),
+            taup=max(200 * dt, 100.0),
+        )
 
     if "berendsen" in thermostat_l:
         return NVTBerendsen(
@@ -293,62 +354,6 @@ def _pressure_bar(atoms: Atoms) -> float:
         return 0.0
 
 
-def _build_structure(material: str, props) -> Atoms:
-    """Build a periodic supercell from database properties."""
-    lattice = props.lattice_type
-    a = props.lattice_parameter
-
-    if lattice == "molecular":
-        return _molecular_box(material)
-
-    try:
-        if lattice == "diamond":
-            cell = bulk(material, "diamond", a=a)
-        elif lattice == "fcc":
-            cell = bulk(material, "fcc", a=a)
-        elif lattice == "bcc":
-            cell = bulk(material, "bcc", a=a)
-        elif lattice == "hcp":
-            cell = bulk(material, "hcp", a=a)
-        elif lattice == "zincblende":
-            cell = bulk(material, "zincblende", a=a)
-        else:
-            cell = bulk(material, "sc", a=a)
-    except Exception:
-        cell = bulk(material, "sc", a=a or 3.0)
-
-    return _make_supercell(cell)
-
-
-def _build_fallback_structure(material: str) -> Atoms:
-    """Best-effort structure for materials not in the database."""
-    if material.upper() == "H2O":
-        return _molecular_box("H2O")
-    try:
-        return _make_supercell(bulk(material, "fcc", a=3.6))
-    except Exception:
-        try:
-            return _molecular_box(material)
-        except Exception as exc:  # noqa: BLE001
-            raise ValueError(
-                f"Could not build a structure for '{material}'. "
-                "Provide a known material or a structure file."
-            ) from exc
-
-
-def _make_supercell(cell: Atoms, target_atoms: int = 64) -> Atoms:
-    """Replicate a unit cell into a supercell with roughly target_atoms atoms."""
-    n_unit = max(1, len(cell))
-    reps = max(1, int(round((target_atoms / n_unit) ** (1.0 / 3.0))))
-    supercell = cell * (reps, reps, reps)
-    supercell.pbc = True
-    return supercell
-
-
-def _molecular_box(formula: str, box: float = 12.0) -> Atoms:
-    """Place a molecule in a cubic box."""
-    mol = molecule(formula)
-    mol.set_cell([box, box, box])
-    mol.center()
-    mol.pbc = False
-    return mol
+def run_from_spec(spec) -> Dict[str, Any]:
+    """Run MD from a :class:`~materials_ai_agent.simulation_spec.SimulationSpec`."""
+    return run_simple_simulation(**spec.to_run_kwargs())
