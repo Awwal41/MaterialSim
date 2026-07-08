@@ -4,7 +4,13 @@ import pytest
 
 from materials_ai_agent import Config
 from materials_ai_agent.simulation_parser import parse_simulation_instruction
-from materials_ai_agent.structure_builder import build_atoms, parse_alloy_notation
+from materials_ai_agent.structure_builder import (
+    build_atoms,
+    infer_material_label,
+    load_structure_file,
+    normalize_structure_source,
+    parse_alloy_notation,
+)
 
 
 @pytest.fixture
@@ -61,6 +67,21 @@ class TestSimulationParser:
         assert spec.thermostat == "Berendsen"
         assert spec.timestep == 0.002
 
+    def test_mp_id_sets_material_project_source(self, config):
+        spec = parse_simulation_instruction(
+            "NVT simulation using mp-134 for 2000 steps at 300 K", config
+        )
+        assert spec.mp_material_id == "mp-134"
+        assert spec.structure_source == "material_project"
+        assert spec.material == "mp-134"
+
+    def test_upload_keyword_sets_file_source(self, config):
+        spec = parse_simulation_instruction(
+            "NVT simulation of my structure file at 300 K for 1000 steps", config
+        )
+        assert spec.structure_source == "file"
+        assert spec.material == "custom"
+
 
 class TestStructureBuilder:
     def test_build_copper_supercell(self):
@@ -83,3 +104,31 @@ class TestStructureBuilder:
         assert parse_alloy_notation("Cu0.8Ni0.2") == (["Cu", "Ni"], [0.8, 0.2])
         assert parse_alloy_notation("Fe-Cr alloy")[0] == ["Fe", "Cr"]
         assert parse_alloy_notation("Al2O3 NVT") is None
+
+    def test_normalize_structure_source(self):
+        assert normalize_structure_source("upload") == "file"
+        assert normalize_structure_source("material_project") == "material_project"
+        assert normalize_structure_source("mp") == "material_project"
+
+    def test_load_structure_file_xyz(self, tmp_path):
+        xyz = tmp_path / "cu2.xyz"
+        xyz.write_text(
+            "2\nCu dimer\n"
+            "Cu 0 0 0\n"
+            "Cu 2 0 0\n",
+            encoding="utf-8",
+        )
+        atoms = load_structure_file(xyz)
+        assert len(atoms) == 2
+        assert set(atoms.get_chemical_symbols()) == {"Cu"}
+
+    def test_build_from_file(self, tmp_path):
+        xyz = tmp_path / "al.xyz"
+        xyz.write_text(
+            "1\nAl\n"
+            "Al 0 0 0\n",
+            encoding="utf-8",
+        )
+        atoms = build_atoms("custom", structure_source="file", structure_file=str(xyz))
+        assert len(atoms) == 1
+        assert atoms.get_chemical_symbols() == ["Al"]

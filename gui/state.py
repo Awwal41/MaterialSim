@@ -41,6 +41,7 @@ def initialize_session_state() -> None:
             "force_field": config.default_force_field,
             "structure_source": config.default_structure_source,
             "structure_file": None,
+            "mp_material_id": None,
             "explanations_shown": set(),
             "user_confirmations": {},
         }

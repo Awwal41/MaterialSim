@@ -23,11 +23,45 @@ _COMPOUND_LATTICE = {
     "TiO2": ("rutile", 4.59),
     "MgO": ("rocksalt", 4.21),
     "Fe2O3": ("corundum", 5.03),
+    "GaN": ("wurtzite", 3.19),
+    "ZnO": ("wurtzite", 3.25),
+    "NaCl": ("rocksalt", 5.64),
+    "CaF2": ("fluorite", 5.46),
 }
+
+_FILE_SOURCE_ALIASES = frozenset({"file", "upload", "user", "custom"})
+_MP_SOURCE_ALIASES = frozenset({"material_project", "materials_project", "mp", "materials project"})
+
+
+def normalize_structure_source(source: str) -> str:
+    """Map user-facing structure source labels to internal values."""
+    key = (source or "generate").strip().lower().replace("-", "_")
+    if key in _FILE_SOURCE_ALIASES:
+        return "file"
+    if key in _MP_SOURCE_ALIASES:
+        return "material_project"
+    return key or "generate"
+
+
+def infer_material_label(atoms: Atoms) -> str:
+    """Derive a human-readable formula from an :class:`ase.Atoms` object."""
+    symbols = atoms.get_chemical_symbols()
+    if not symbols:
+        return "custom"
+    counts: dict[str, int] = {}
+    for sym in symbols:
+        counts[sym] = counts.get(sym, 0) + 1
+    try:
+        from pymatgen.core import Composition
+
+        return Composition(counts).reduced_formula
+    except Exception:
+        parts = [f"{sym}{counts[sym]}" if counts[sym] > 1 else sym for sym in sorted(counts)]
+        return "".join(parts)
 
 
 def load_structure_file(path: str | Path) -> Atoms:
-    """Load a structure from XYZ, CIF, POSCAR, etc."""
+    """Load a structure from XYZ, CIF, POSCAR, PDB, etc."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"Structure file not found: {path}")
@@ -36,6 +70,8 @@ def load_structure_file(path: str | Path) -> Atoms:
         raise ValueError(f"Could not read a single structure from {path}")
     if atoms.cell.rank == 3:
         atoms.pbc = True
+    atoms.info.setdefault("structure_source", "file")
+    atoms.info.setdefault("structure_file", str(p.resolve()))
     return atoms
 
 
@@ -44,18 +80,38 @@ def build_atoms(
     *,
     structure_source: str = "generate",
     structure_file: Optional[str] = None,
+    mp_material_id: Optional[str] = None,
     supercell_reps: Optional[Tuple[int, int, int]] = None,
     target_atoms: int = 64,
     alloy_elements: Optional[List[str]] = None,
     alloy_fractions: Optional[List[float]] = None,
+    mp_api_key: Optional[str] = None,
 ) -> Atoms:
     """Build or load an :class:`ase.Atoms` object for *material*."""
-    if structure_source == "file" or structure_file:
+    source = normalize_structure_source(structure_source)
+
+    if source == "file" or structure_file:
         if not structure_file:
-            raise ValueError("structure_file is required when structure_source='file'.")
+            raise ValueError(
+                "structure_file is required when using an uploaded or user-provided structure."
+            )
         atoms = load_structure_file(structure_file)
         if supercell_reps:
             atoms = atoms * supercell_reps
+        return atoms
+
+    if source == "material_project" or mp_material_id:
+        from .mp_structure import fetch_mp_structure
+
+        atoms = fetch_mp_structure(
+            mp_material_id or material,
+            api_key=mp_api_key,
+            material_id=mp_material_id,
+        )
+        if supercell_reps:
+            atoms = atoms * supercell_reps
+        elif target_atoms and len(atoms) < target_atoms:
+            atoms = _resize_supercell(atoms, target_atoms)
         return atoms
 
     if alloy_elements and len(alloy_elements) >= 2:
@@ -66,7 +122,7 @@ def build_atoms(
             target_atoms=target_atoms,
         )
 
-    formula = material.strip()
+    formula = (material or "").strip() or "custom"
     db = MaterialsDatabase()
     props = db.get_material(formula)
 
@@ -75,7 +131,7 @@ def build_atoms(
     elif formula in _COMPOUND_LATTICE:
         atoms = _build_compound(formula)
     else:
-        atoms = _build_fallback(formula)
+        atoms = _build_fallback(formula, mp_api_key=mp_api_key)
 
     if supercell_reps:
         atoms = atoms * supercell_reps
@@ -148,19 +204,81 @@ def _build_compound(formula: str) -> Atoms:
     return bulk(formula, struct, a=a)
 
 
-def _build_fallback(formula: str) -> Atoms:
+def _build_fallback(formula: str, *, mp_api_key: Optional[str] = None) -> Atoms:
     if formula.upper() == "H2O":
         return _molecular_box("H2O")
-    # Try pymatgen-style formula parsing via ASE bulk.
-    for crystal in ("fcc", "bcc", "diamond", "sc"):
+
+    if formula.lower() in {"custom", "user", "uploaded"}:
+        raise ValueError(
+            "No structure file or Materials Project ID was provided. "
+            "Upload a structure file (XYZ, CIF, POSCAR) or specify an mp-id."
+        )
+
+    # Try pymatgen-informed ASE builders for arbitrary stoichiometries.
+    atoms = _try_pymatgen_bulk(formula)
+    if atoms is not None:
+        return atoms
+
+    for crystal in ("fcc", "bcc", "diamond", "zincblende", "rocksalt", "wurtzite", "sc"):
         try:
-            return bulk(formula, crystal, a=3.6)
+            return bulk(formula, crystal, a=3.6, cubic=True)
         except Exception:
             continue
+
+    # Last resort: fetch from Materials Project when configured.
+    from .mp_structure import fetch_mp_structure, mp_available
+
+    if mp_available(mp_api_key):
+        try:
+            return fetch_mp_structure(formula, api_key=mp_api_key)
+        except Exception as exc:
+            logger.warning("MP fallback failed for %s: %s", formula, exc)
+
     raise ValueError(
         f"Could not build a structure for '{formula}'. "
-        "Provide a structure file or a supported formula (e.g. Cu, Al2O3, CuNi alloy)."
+        "Provide a structure file, an mp-id (e.g. mp-1234), or a supported formula."
     )
+
+
+def _try_pymatgen_bulk(formula: str) -> Optional[Atoms]:
+    """Use pymatgen composition hints to pick a reasonable ASE bulk prototype."""
+    try:
+        from pymatgen.core import Composition
+    except ImportError:
+        return None
+
+    try:
+        comp = Composition(formula)
+    except Exception:
+        return None
+
+    elements = [str(el) for el in comp.elements]
+    if len(elements) == 1:
+        el = elements[0]
+        for crystal in ("fcc", "bcc", "diamond", "hcp", "sc"):
+            try:
+                return bulk(el, crystal, a=_guess_lattice(el), cubic=True)
+            except Exception:
+                continue
+        return None
+
+    if len(elements) == 2:
+        a_el, b_el = elements[0], elements[1]
+        ratio = comp.get_atomic_fraction(a_el) / max(comp.get_atomic_fraction(b_el), 1e-9)
+        prototypes = (
+            ["zincblende", "rocksalt", "wurtzite", "cesiumchloride", "fluorite"]
+            if ratio <= 1.5
+            else ["rocksalt", "fluorite", "cesiumchloride"]
+        )
+        for crystal in prototypes:
+            try:
+                return bulk(f"{a_el}{b_el}", crystal, a=3.6, cubic=True)
+            except Exception:
+                try:
+                    return bulk(comp.reduced_formula, crystal, a=3.6, cubic=True)
+                except Exception:
+                    continue
+    return None
 
 
 def _resize_supercell(cell: Atoms, target_atoms: int) -> Atoms:
@@ -189,7 +307,6 @@ def parse_alloy_notation(text: str) -> Optional[Tuple[List[str], List[float]]]:
     lower = text.lower()
     t = text.replace(" ", "")
 
-    # Decimal fractions only — avoids misreading stoichiometric formulas (Al2O3).
     m = re.search(r"([A-Z][a-z]?)(0?\.\d+|[01]\.\d+)([A-Z][a-z]?)(0?\.\d+|[01]\.\d+)", t)
     if m:
         e1, f1, e2, f2 = m.group(1), float(m.group(2)), m.group(3), float(m.group(4))

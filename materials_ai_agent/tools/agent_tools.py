@@ -28,11 +28,14 @@ def create_agent_tools(config) -> List:
         timestep: Optional[float] = None,
         target_atoms: Optional[int] = None,
         structure_file: Optional[str] = None,
+        structure_source: Optional[str] = None,
+        mp_material_id: Optional[str] = None,
+        supercell_reps: Optional[str] = None,
     ) -> str:
         """Run molecular dynamics simulation and return a summary.
 
         Args:
-            material: Material formula, e.g. 'Cu', 'Al', 'Al2O3', 'CuNi'.
+            material: Material formula, e.g. 'Cu', 'Al', 'Al2O3', 'CuNi', or 'custom' with a file.
             temperature: Temperature in Kelvin.
             pressure: Pressure in atm (for NPT).
             n_steps: Number of MD steps to run.
@@ -41,8 +44,26 @@ def create_agent_tools(config) -> List:
             thermostat: Thermostat ('Langevin', 'Berendsen', 'Nose-Hoover').
             timestep: Integration timestep in ps.
             target_atoms: Approximate number of atoms in the generated supercell.
-            structure_file: Optional path to XYZ/CIF/POSCAR to load instead of building.
+            structure_file: Path to XYZ/CIF/POSCAR/PDB to load instead of building.
+            structure_source: 'generate', 'file'/'upload', or 'material_project'.
+            mp_material_id: Materials Project id (e.g. 'mp-1234') when MP is the source.
+            supercell_reps: Supercell as '4x4x4' when replicating a loaded structure.
         """
+        reps = None
+        if supercell_reps:
+            parts = supercell_reps.lower().replace("×", "x").split("x")
+            if len(parts) == 3:
+                reps = tuple(int(p) for p in parts)
+
+        resolved_source = structure_source
+        if not resolved_source:
+            if structure_file:
+                resolved_source = "file"
+            elif mp_material_id:
+                resolved_source = "material_project"
+            else:
+                resolved_source = "generate"
+
         result = run_simple_simulation(
             material=material,
             temperature=temperature,
@@ -54,7 +75,9 @@ def create_agent_tools(config) -> List:
             timestep=timestep,
             target_atoms=target_atoms or 64,
             structure_file=structure_file,
-            structure_source="file" if structure_file else "generate",
+            structure_source=resolved_source,
+            mp_material_id=mp_material_id,
+            supercell_reps=reps,
         )
         if result.get("success"):
             return (

@@ -28,7 +28,7 @@ from .md.potentials import (
     select_calculator,
 )
 from .simulation_quality import assess_simulation_quality
-from .structure_builder import build_atoms
+from .structure_builder import build_atoms, infer_material_label, normalize_structure_source
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ def run_simple_simulation(
     output_frequency: Optional[int] = None,
     structure_source: str = "generate",
     structure_file: Optional[str] = None,
+    mp_material_id: Optional[str] = None,
     supercell_reps: Optional[Tuple[int, int, int]] = None,
     target_atoms: int = 64,
     alloy_elements: Optional[List[str]] = None,
@@ -67,21 +68,27 @@ def run_simple_simulation(
         thermostat = thermostat or config.default_thermostat
         output_frequency = int(output_frequency or 100)
         output_frequency = max(1, min(output_frequency, max(1, n_steps)))
-
-        sim_dir = Path("simulations") / _simulation_dir_name(
-            material, temperature, ensemble, pressure, n_steps, len(alloy_elements or [])
-        )
-        sim_dir.mkdir(parents=True, exist_ok=True)
+        structure_source = normalize_structure_source(structure_source)
 
         atoms = build_atoms(
             material,
             structure_source=structure_source,
             structure_file=structure_file,
+            mp_material_id=mp_material_id,
             supercell_reps=supercell_reps,
             target_atoms=target_atoms,
             alloy_elements=alloy_elements,
             alloy_fractions=alloy_fractions,
+            mp_api_key=config.mp_api_key,
         )
+
+        if material in {"", "custom", "user", "uploaded"} or structure_file or mp_material_id:
+            material = infer_material_label(atoms)
+
+        sim_dir = Path("simulations") / _simulation_dir_name(
+            material, temperature, ensemble, pressure, n_steps, len(alloy_elements or [])
+        )
+        sim_dir.mkdir(parents=True, exist_ok=True)
 
         material_props = materials_db.get_material(material)
         calculator, used_force_field, potential_warnings = select_calculator(
@@ -128,6 +135,7 @@ def run_simple_simulation(
             "n_atoms": len(atoms),
             "structure_source": structure_source,
             "structure_file": structure_file,
+            "mp_material_id": mp_material_id,
             "supercell_reps": list(supercell_reps) if supercell_reps else None,
             "target_atoms": target_atoms,
             "alloy_elements": alloy_elements,

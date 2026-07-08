@@ -310,21 +310,30 @@ Which force field would you like to use?
 For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
         elif any(word in prompt_lower for word in ["upload", "file", "own"]):
             workflow["structure_source"] = "upload"
-            workflow["step"] = 7
-            response = f"""Great! You'll upload your own structure file.
+            workflow["step"] = 65
+            response = """Great! Use the file uploader below to provide your structure (XYZ, CIF, POSCAR, PDB).
 
-**Step 7: Force Field Selection**
-Which force field would you like to use?
-- **Tersoff**: Good for covalent materials like Si, C, Ge
-- **EAM**: Good for metals like Al, Cu, Fe, Ni
-- **Lennard-Jones**: Good for noble gases and simple systems
-- **ReaxFF**: Good for reactive systems with C, H, O, N
-
-For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
+Once the file is uploaded, we'll continue to force-field selection."""
         elif any(word in prompt_lower for word in ["materials project", "mp", "database"]):
             workflow["structure_source"] = "material_project"
-            workflow["step"] = 7
-            response = f"""Perfect! I'll search the Materials Project database for {workflow['material']}.
+            workflow["step"] = 66
+            response = f"""Perfect! I'll fetch a structure for **{workflow['material']}** from the Materials Project database when you continue.
+
+You can also type a specific Materials Project id (e.g. `mp-1234`) in the box below, then press Enter or click **Use MP structure**."""
+        else:
+            response = "Please choose one of the options: Generate, Upload, or Materials Project. Just say which one you prefer."
+    elif step == 65:
+        response = "Upload your structure file using the uploader below, then we'll proceed to force-field selection."
+    elif step == 66:
+        mp_id = extract_mp_id_from_prompt(prompt)
+        if mp_id:
+            workflow["mp_material_id"] = mp_id
+            try:
+                path = fetch_mp_structure_for_workflow(workflow)
+                workflow["structure_file"] = path
+                workflow["structure_source"] = "material_project"
+                workflow["step"] = 7
+                response = f"""Loaded **{workflow['mp_material_id']}** from Materials Project.
 
 **Step 7: Force Field Selection**
 Which force field would you like to use?
@@ -333,10 +342,28 @@ Which force field would you like to use?
 - **Lennard-Jones**: Good for noble gases and simple systems
 - **ReaxFF**: Good for reactive systems with C, H, O, N
 
-For {workflow['material']}, I recommend **Tersoff**. Which force field would you like to use?"""
+Which force field would you like to use?"""
+            except Exception as exc:
+                response = f"Could not fetch {mp_id} from Materials Project: {exc}"
+        elif workflow.get("structure_file"):
+            workflow["step"] = 7
+            src = workflow.get("mp_material_id") or workflow["material"]
+            response = f"""Structure ready from Materials Project ({src}).
+
+**Step 7: Force Field Selection**
+Which force field would you like to use?
+- **Tersoff**: Good for covalent materials like Si, C, Ge
+- **EAM**: Good for metals like Al, Cu, Fe, Ni
+- **Lennard-Jones**: Good for noble gases and simple systems
+- **ReaxFF**: Good for reactive systems with C, H, O, N
+
+Which force field would you like to use?"""
         else:
-            response = "Please choose one of the options: Generate, Upload, or Materials Project. Just say which one you prefer."
-    
+            response = (
+                "Enter a Materials Project id (e.g. mp-1234) or click **Use MP structure** "
+                f"to fetch the lowest-energy structure for {workflow['material']}."
+            )
+
     elif step == 7:  # Force field selection
         if "tersoff" in prompt_lower:
             workflow["force_field"] = "Tersoff"
@@ -351,9 +378,13 @@ For {workflow['material']}, I recommend **Tersoff**. Which force field would you
             st.session_state.messages.append({"role": "assistant", "content": response})
             st.rerun()
             return
-        
-        # Move to confirmation
+
         workflow["step"] = 8
+        structure_note = workflow["structure_source"]
+        if workflow.get("structure_file"):
+            structure_note += f" ({Path(workflow['structure_file']).name})"
+        if workflow.get("mp_material_id"):
+            structure_note += f" ({workflow['mp_material_id']})"
         response = f"""Perfect! We'll use the {workflow['force_field']} force field.
 
 **Simulation Summary:**
@@ -364,7 +395,7 @@ For {workflow['material']}, I recommend **Tersoff**. Which force field would you
 - **Timestep**: {workflow['timestep']} ps
 - **Steps**: {workflow['n_steps']:,}
 - **Total Time**: {workflow['timestep'] * workflow['n_steps']:.2f} ps
-- **Structure**: {workflow['structure_source']}
+- **Structure**: {structure_note}
 - **Force Field**: {workflow['force_field']}
 
 Does everything look correct? Say 'Yes, run the simulation' to start, or tell me what you'd like to change."""
@@ -495,6 +526,101 @@ def extract_steps_from_prompt(prompt: str) -> int:
     if steps_match:
         return int(steps_match.group(1))
     return None
+
+
+def extract_mp_id_from_prompt(prompt: str) -> str | None:
+    """Extract a Materials Project id from user text."""
+    m = re.search(r"\b(mp-\d+)\b", prompt, re.I)
+    return m.group(1) if m else None
+
+
+def _structure_upload_dir() -> Path:
+    root = Path("simulations") / "uploaded_structures"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def save_uploaded_structure(uploaded_file) -> str:
+    """Persist a Streamlit uploaded file and return its path."""
+    dest = _structure_upload_dir() / uploaded_file.name
+    dest.write_bytes(uploaded_file.getvalue())
+    return str(dest.resolve())
+
+
+def fetch_mp_structure_for_workflow(workflow: dict) -> str:
+    """Fetch an MP structure, save it locally, and return the file path."""
+    from materials_ai_agent.core.config import Config
+    from materials_ai_agent.mp_structure import fetch_mp_structure
+    from ase.io import write
+
+    config = Config.from_env()
+    identifier = workflow.get("mp_material_id") or workflow["material"]
+    atoms = fetch_mp_structure(identifier, api_key=config.mp_api_key)
+    mp_id = atoms.info.get("mp_material_id", identifier)
+    workflow["mp_material_id"] = mp_id
+    dest = _structure_upload_dir() / f"{mp_id}.cif"
+    write(str(dest), atoms, format="cif")
+    return str(dest.resolve())
+
+
+def render_structure_capture() -> None:
+    """Show upload / Materials Project controls during structure setup."""
+    workflow = st.session_state.simulation_workflow
+    step = workflow.get("step", 0)
+
+    if step == 65:
+        st.markdown("#### Upload structure")
+        uploaded = st.file_uploader(
+            "Structure file (XYZ, CIF, POSCAR, PDB)",
+            type=["xyz", "cif", "poscar", "vasp", "pdb"],
+            key="sim_structure_upload",
+        )
+        if uploaded is not None:
+            path = save_uploaded_structure(uploaded)
+            workflow["structure_file"] = path
+            workflow["structure_source"] = "upload"
+            workflow["step"] = 7
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": (
+                    f"Structure **{uploaded.name}** loaded ({path}).\n\n"
+                    "**Step 7: Force Field Selection**\n"
+                    "Which force field would you like? Tersoff, EAM, Lennard-Jones, or ReaxFF."
+                ),
+            })
+            st.rerun()
+
+    elif step == 66:
+        st.markdown("#### Materials Project structure")
+        mp_input = st.text_input(
+            "Materials Project id (optional)",
+            value=workflow.get("mp_material_id") or "",
+            placeholder="mp-1234",
+            key="sim_mp_id_input",
+        )
+        if mp_input:
+            workflow["mp_material_id"] = mp_input.strip()
+
+        if st.button("Use MP structure", key="sim_fetch_mp"):
+            try:
+                path = fetch_mp_structure_for_workflow(workflow)
+                workflow["structure_file"] = path
+                workflow["structure_source"] = "material_project"
+                workflow["step"] = 7
+                mp_id = workflow.get("mp_material_id", workflow["material"])
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": (
+                        f"Loaded **{mp_id}** from Materials Project.\n\n"
+                        "**Step 7: Force Field Selection**\n"
+                        "Which force field would you like? Tersoff, EAM, Lennard-Jones, or ReaxFF."
+                    ),
+                })
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not fetch from Materials Project: {exc}")
+
+
 def run_simulation_with_progress():
     """Run simulation with progress bar and detailed feedback."""
     try:
@@ -526,16 +652,27 @@ def run_simulation_with_progress():
             progress_bar.progress(25)
 
             from materials_ai_agent.simple_simulation import run_simple_simulation
-            result = run_simple_simulation(
-                material=workflow['material'],
-                temperature=workflow['temperature'],
-                n_steps=workflow['n_steps'],
-                force_field=workflow['force_field'],
-                ensemble=workflow.get('ensemble'),
-                thermostat=workflow.get('thermostat'),
-                timestep=workflow.get('timestep'),
-                output_frequency=100,
-            )
+            from materials_ai_agent.structure_builder import normalize_structure_source
+
+            run_kwargs = {
+                "material": workflow["material"],
+                "temperature": workflow["temperature"],
+                "n_steps": workflow["n_steps"],
+                "force_field": workflow["force_field"],
+                "ensemble": workflow.get("ensemble"),
+                "thermostat": workflow.get("thermostat"),
+                "timestep": workflow.get("timestep"),
+                "output_frequency": 100,
+                "structure_source": normalize_structure_source(
+                    workflow.get("structure_source", "generate")
+                ),
+            }
+            if workflow.get("structure_file"):
+                run_kwargs["structure_file"] = workflow["structure_file"]
+            if workflow.get("mp_material_id"):
+                run_kwargs["mp_material_id"] = workflow["mp_material_id"]
+
+            result = run_simple_simulation(**run_kwargs)
 
             if result["success"]:
                 st.session_state['last_sim_dir'] = result['simulation_directory']

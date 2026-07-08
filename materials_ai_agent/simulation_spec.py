@@ -18,8 +18,9 @@ class SimulationSpec:
     ensemble: str = "NVT"
     thermostat: str = "Langevin"
     force_field: Optional[str] = None
-    structure_source: str = "generate"  # generate | file
+    structure_source: str = "generate"  # generate | file | upload | material_project
     structure_file: Optional[str] = None
+    mp_material_id: Optional[str] = None
     supercell_reps: Optional[tuple[int, int, int]] = None
     target_atoms: int = 64
     output_frequency: int = 100
@@ -46,6 +47,10 @@ class SimulationSpec:
             parts.append(f"alloy {''.join(self.alloy_elements)}")
         if self.structure_file:
             parts.append(f"structure={self.structure_file}")
+        if self.mp_material_id:
+            parts.append(f"mp-id={self.mp_material_id}")
+        if self.structure_source not in ("generate", ""):
+            parts.append(f"source={self.structure_source}")
         if self.supercell_reps:
             parts.append(f"supercell={self.supercell_reps}")
         return ", ".join(parts)

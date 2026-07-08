@@ -9,6 +9,7 @@ from gui.simulation_workflow import (
     get_ai_response,
     handle_simulation_conversation,
     is_simulation_request,
+    render_structure_capture,
     start_interactive_simulation_workflow,
 )
 
@@ -98,6 +99,7 @@ def _chat_fragment() -> None:
         _render_welcome_body()
 
     _render_messages()
+    render_structure_capture()
 
     pending = st.session_state.pop("_pending_prompt", None)
     if pending:

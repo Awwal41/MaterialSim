@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from ase import Atoms
 from ase.calculators.emt import EMT, parameters as EMT_PARAMETERS
@@ -34,11 +34,15 @@ _LJ_DEFAULT = (0.0103, 3.4)
 _LJ_RC = 8.5
 
 
-def lj_parameters_for_material(material: str) -> Tuple[float, float]:
-    """Return (epsilon, sigma) for element *material*."""
+def lj_parameters_for_material(material: str, symbols: Optional[set[str]] = None) -> Tuple[float, float]:
+    """Return (epsilon, sigma) for *material* or the dominant element in *symbols*."""
     sym = material.strip().title() if len(material) <= 2 else material
     if sym in _LJ_BY_ELEMENT:
         return _LJ_BY_ELEMENT[sym]
+    if symbols:
+        for element in sorted(symbols):
+            if element in _LJ_BY_ELEMENT:
+                return _LJ_BY_ELEMENT[element]
     return _LJ_DEFAULT
 
 
@@ -51,17 +55,16 @@ def select_calculator(
     warnings: List[str] = []
     symbols = set(atoms.get_chemical_symbols())
     ff = (force_field or "").lower()
-    mat = material.strip()
+    mat = material.strip() or (next(iter(symbols), "") if symbols else "")
 
     if ff in {"lj", "lennard-jones", "lennardjones"}:
-        eps, sig = lj_parameters_for_material(mat)
+        eps, sig = lj_parameters_for_material(mat, symbols)
         return LennardJones(epsilon=eps, sigma=sig, rc=_LJ_RC), "lennard-jones", warnings
 
     if symbols.issubset(EMT_ELEMENTS):
         return EMT(), "emt", warnings
 
-    # Fallback LJ for unsupported elements (e.g. Si, Fe).
-    eps, sig = lj_parameters_for_material(mat)
+    eps, sig = lj_parameters_for_material(mat, symbols)
     logger.warning(
         "No dedicated ASE potential for %s; using element-tuned Lennard-Jones.",
         "".join(sorted(symbols)),
